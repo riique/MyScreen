@@ -20,15 +20,30 @@ export function Navbar() {
   const router = useRouter();
   const pathname = usePathname();
 
+  // Revalida a sessão a cada navegação. Com `[]` a busca rodava uma vez e a
+  // Navbar — montada pelo layout raiz, que o App Router mantém vivo entre
+  // navegações client-side — ficava com estado obsoleto: apos `router.push`
+  // do login, o cookie existia mas a barra continuava mostrando "Entrar".
+  // `router.refresh()` re-renderiza Server Components, nao remonta Client
+  // Components nem re-executa seus efeitos.
   useEffect(() => {
-    fetch("/api/auth/me")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.user) setUser(data.user);
+    let cancelled = false;
+    setLoading(true);
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : { user: null }))
+      .then((data: { user?: UserProfile | null }) => {
+        if (!cancelled) setUser(data.user ?? null);
       })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+      .catch(() => {
+        if (!cancelled) setUser(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
 
   const handleLogout = async () => {
     try {

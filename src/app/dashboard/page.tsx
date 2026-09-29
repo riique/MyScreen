@@ -32,15 +32,20 @@ interface RoomItem {
  * `Este ID de sala já está em uso.`). Traduz para o campo do formulário para
  * que o leitor de tela anuncie `aria-invalid` no input certo.
  */
+const FORM_FIELDS: FormField[] = ["title", "customId", "password"];
+
+/**
+ * Ultimo recurso: infere o campo pelo texto. So e usado quando a API nao
+ * mandou `field` (erro 409 de sala duplicada, por exemplo).
+ *
+ * Nao casa por `includes("id")`: "invalido" contem "id" e fazia um erro de
+ * TITULO marcar o campo de ID da sala.
+ */
 function errorFieldFor(message: string): FormField | null {
   const normalized = message.toLowerCase();
-  const quoted = /campo "([a-z]+)"/.exec(normalized)?.[1];
-  if (quoted === "title" || quoted === "customid" || quoted === "password") {
-    return quoted === "customid" ? "customId" : (quoted as FormField);
-  }
+  if (normalized.includes("id da sala")) return "customId";
   if (normalized.includes("senha")) return "password";
-  if (normalized.includes("id")) return "customId";
-  if (normalized.includes("título") || normalized.includes("titulo")) return "title";
+  if (normalized.includes("titulo") || normalized.includes("título")) return "title";
   return null;
 }
 
@@ -112,11 +117,16 @@ export default function DashboardPage() {
       if (!res.ok) {
         const message: string = data.error || "Erro ao criar sala.";
         setFormError(message);
-        setErrorField(errorFieldFor(message));
+        // `withErrorHandling` ja devolve `field` no corpo; so recorre ao texto
+        // quando a resposta nao o traz (409 de id duplicado, 500).
+        const fromApi = data.field;
+        setErrorField(
+          FORM_FIELDS.includes(fromApi) ? (fromApi as FormField) : errorFieldFor(message)
+        );
         return;
       }
 
-      setIsModalOpen(false);
+      closeModal();
       setTitle("");
       setCustomId("");
       setPassword("");
@@ -154,6 +164,18 @@ export default function DashboardPage() {
     }
   };
 
+  const openModal = () => {
+    setFormError("");
+    setErrorField(null);
+    setIsModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setFormError("");
+    setErrorField(null);
+    setIsModalOpen(false);
+  };
+
   return (
     <div className="container mx-auto max-w-6xl px-4 py-10 sm:px-6">
       {/* Header */}
@@ -171,7 +193,7 @@ export default function DashboardPage() {
 
         <button
           type="button"
-          onClick={() => setIsModalOpen(true)}
+          onClick={openModal}
           className={`flex cursor-pointer items-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 transition-all hover:bg-indigo-500 ${FOCUS_RING}`}
         >
           <Plus className="h-4 w-4" />
@@ -275,7 +297,7 @@ export default function DashboardPage() {
             </p>
             <button
               type="button"
-              onClick={() => setIsModalOpen(true)}
+              onClick={openModal}
               className={`rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-500 ${FOCUS_RING}`}
             >
               Criar Minha Primeira Sala
@@ -470,7 +492,7 @@ export default function DashboardPage() {
               <div className="flex items-center justify-end gap-3 pt-3">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={closeModal}
                   className={`rounded-xl px-4 py-2.5 text-xs font-medium text-gray-400 transition-colors hover:text-white ${FOCUS_RING}`}
                 >
                   Cancelar
