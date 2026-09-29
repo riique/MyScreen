@@ -1,0 +1,61 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=file:/app/data/database.sqlite
+      - JWT_SECRET=${JWT_SECRET:-myscreen_jwt_super_secret_replace_in_production_key_32chars}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-myscreen_livekit_key}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-myscreen_livekit_secret_token_change_in_production}
+      - LIVEKIT_URL=http://livekit:7880
+      - NEXT_PUBLIC_LIVEKIT_URL=${NEXT_PUBLIC_LIVEKIT_URL:-wss://${DOMAIN}}
+    volumes:
+      - app-data:/app/data
+    networks:
+      - myscreen-network
+
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "3478:3478/udp"
+      - "50000-60000:50000-60000/udp"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    environment:
+      - LIVEKIT_KEYS=${LIVEKIT_API_KEY:-myscreen_livekit_key}: ${LIVEKIT_API_SECRET:-myscreen_livekit_secret_token_change_in_production}
+    networks:
+      - myscreen-network
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+      - livekit
+    networks:
+      - myscreen-network
+
+networks:
+  myscreen-network:
+    driver: bridge
+
+volumes:
+  app-data:
+  caddy-data:
+  caddy-config:

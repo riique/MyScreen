@@ -1,0 +1,22 @@
+{$DOMAIN:localhost} {
+    # LiveKit WebRTC Signaling & API
+    @livekit path /rtc* /twirp*
+    handle @livekit {
+        reverse_proxy livekit:7880 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Next.js Application
+    handle {
+        reverse_proxy app:3000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+}

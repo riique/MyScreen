@@ -1,0 +1,3 @@
+# MyScreen Assets
+User-agent: *
+Allow: /

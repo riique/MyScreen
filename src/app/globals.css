@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --background: #090a0f;
+    --foreground: #f3f4f6;
+    --card: #11131a;
+    --card-foreground: #f3f4f6;
+    --popover: #11131a;
+    --popover-foreground: #f3f4f6;
+    --primary: #6366f1;
+    --primary-foreground: #ffffff;
+    --secondary: #1e2230;
+    --secondary-foreground: #e2e8f0;
+    --muted: #181b26;
+    --muted-foreground: #94a3b8;
+    --accent: #2e354b;
+    --accent-foreground: #ffffff;
+    --destructive: #ef4444;
+    --destructive-foreground: #ffffff;
+    --border: #232839;
+    --input: #232839;
+    --ring: #6366f1;
+    --radius: 0.75rem;
+  }
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  overflow-x: hidden;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0c0e15;
+}
+::-webkit-scrollbar-thumb {
+  background: #272d40;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3b4360;
+}
+
+/* Custom LiveKit component overrides for dark elegance */
+.lk-video-container {
+  background-color: #0b0d14 !important;
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.lk-participant-tile {
+  border-radius: 0.75rem !important;
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  background: #11141e !important;
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5) !important;
+}
+
+.lk-participant-tile:focus-within,
+.lk-participant-tile.lk-speaking {
+  border-color: #6366f1 !important;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3) !important;
+}
+
+.lk-focus-layout {
+  gap: 1rem !important;
+}
+
+.lk-grid-layout {
+  gap: 1rem !important;
+}
