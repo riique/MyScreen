@@ -5,9 +5,18 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const ROOM_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+
+/**
+ * O id da sala protege o acesso a reuniao, entao precisa de fonte imprevisivel.
+ * `Math.random()` no V8 e xorshift128+: o estado e recuperavel a partir de
+ * algumas amostras o suficiente para adivinhar ids vizinhos.
+ *
+ * A rejeicao de modulo (`byte % 26`) enviesa levemente a distribuicao (256 nao
+ * e multiplo de 26). Com 9 caracteres a chance de colisao continua desprezivel,
+ * e o alternativa seria um alphabet de 32 caracteres com rejection sampling.
+ */
 export function generateRoomId(length = 9): string {
-  const chars = "abcdefghijklmnopqrstuvwxyz";
-  const segment = (len: number) =>
-    Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-  return `${segment(3)}-${segment(3)}-${segment(3)}`;
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  return Array.from(bytes, (byte) => ROOM_ID_ALPHABET[byte % ROOM_ID_ALPHABET.length]).join("");
 }

@@ -1,45 +1,33 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import { withErrorHandling } from "@/lib/validate";
 
-export async function GET(
-  _req: Request,
+/** Consulta publica de sala: existe, titulo, se esta trancada. */
+async function handleGet(
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    const roomId = id.toLowerCase().trim();
+): Promise<NextResponse> {
+  enforceRateLimit(req, "room-lookup", 120, 60_000);
 
-    const room = await prisma.room.findUnique({
-      where: { id: roomId },
-      select: {
-        id: true,
-        title: true,
-        isLocked: true,
-        createdAt: true,
-      },
-    });
+  const { id } = await params;
+  const roomId = id.toLowerCase().trim();
 
-    if (!room) {
-      // Allow instant ephemeral rooms if not yet saved in database
-      return NextResponse.json({
-        exists: false,
-        room: {
-          id: roomId,
-          title: `Sala ${roomId}`,
-          isLocked: false,
-        },
-      });
-    }
+  const room = await prisma.room.findUnique({
+    where: { id: roomId },
+    select: { id: true, title: true, isLocked: true, createdAt: true },
+  });
 
+  // Salas efemeras nunca persistidas continuam valendo: o SFU aceita qualquer
+  // nome de sala e o app cria sala ao entrar.
+  if (!room) {
     return NextResponse.json({
-      exists: true,
-      room,
+      exists: false,
+      room: { id: roomId, title: `Sala ${roomId}`, isLocked: false },
     });
-  } catch (error) {
-    console.error("Erro ao consultar sala:", error);
-    return NextResponse.json(
-      { error: "Erro interno no servidor ao consultar sala." },
-      { status: 500 }
-    );
   }
+
+  return NextResponse.json({ exists: true, room });
 }
+
+export const GET = withErrorHandling(handleGet);

@@ -1,75 +1,47 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { hashPassword, signToken } from "@/lib/auth";
+import { hashPassword, signToken, sessionCookieOptions, SESSION_COOKIE } from "@/lib/auth";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import { EMAIL_PATTERN, HttpError, str, withErrorHandling } from "@/lib/validate";
 
-export async function POST(req: Request) {
-  try {
-    const { name, email, password } = await req.json();
+/**
+ * Limite do bcrypt: 72 bytes. Acima disso o hash nao fica mais seguro, o
+ * truncamento e silencioso — e ainda assim o servidor gasta CPU com o resto.
+ */
+const BCRYPT_MAX_BYTES = 72;
 
-    if (!name || !email || !password) {
-      return NextResponse.json(
-        { error: "Nome, email e senha são obrigatórios." },
-        { status: 400 }
-      );
-    }
+async function handleRegister(req: Request): Promise<NextResponse> {
+  enforceRateLimit(req, "register", 5, 60 * 60_000);
 
-    if (password.length < 6) {
-      return NextResponse.json(
-        { error: "A senha deve ter no mínimo 6 caracteres." },
-        { status: 400 }
-      );
-    }
+  const body: Record<string, unknown> = await req.json().catch(() => ({}));
+  const name = str(body, "name", { max: 80 });
+  const email = str(body, "email", { max: 254, pattern: EMAIL_PATTERN }).toLowerCase();
+  // `str` conta caracteres, o bcrypt corta em bytes: 128 chars podem passar do
+  // limite em UTF-8 sem o transporte rejeitar.
+  const password = str(body, "password", { min: 10, max: BCRYPT_MAX_BYTES });
 
-    const existingUser = await prisma.user.findUnique({
-      where: { email: email.toLowerCase().trim() },
-    });
+  if (Buffer.byteLength(password, "utf8") > BCRYPT_MAX_BYTES) {
+    throw new HttpError(400, "A senha deve ter no máximo 72 bytes.");
+  }
 
-    if (existingUser) {
-      return NextResponse.json(
-        { error: "Este email já está cadastrado." },
-        { status: 409 }
-      );
-    }
-
-    const passwordHash = await hashPassword(password);
-    const user = await prisma.user.create({
-      data: {
-        name: name.trim(),
-        email: email.toLowerCase().trim(),
-        passwordHash,
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-      },
-    });
-
-    const token = await signToken({
-      userId: user.id,
-      email: user.email,
-      name: user.name,
-    });
-
-    const response = NextResponse.json({
-      success: true,
-      user,
-    });
-
-    response.cookies.set("myscreen_token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: "/",
-    });
-
-    return response;
-  } catch (error) {
-    console.error("Erro no cadastro:", error);
+  const existingUser = await prisma.user.findUnique({ where: { email } });
+  if (existingUser) {
     return NextResponse.json(
-      { error: "Erro interno no servidor ao cadastrar." },
-      { status: 500 }
+      { error: "Este email já está cadastrado." },
+      { status: 409 }
     );
   }
+
+  const user = await prisma.user.create({
+    data: { name, email, passwordHash: await hashPassword(password) },
+    select: { id: true, email: true, name: true },
+  });
+
+  const token = await signToken({ userId: user.id, email: user.email, name: user.name });
+
+  const response = NextResponse.json({ success: true, user });
+  response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions);
+  return response;
 }
+
+export const POST = withErrorHandling(handleRegister);

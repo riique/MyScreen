@@ -1,17 +1,29 @@
 "use client";
 
-import { useParticipants } from "@livekit/components-react";
-import { Mic, MicOff, Video, VideoOff, Monitor, X, Users, Crown } from "lucide-react";
+import { useMemo } from "react";
+import { useLocalParticipant, useParticipants } from "@livekit/components-react";
+import { Video, VideoOff, X, Users, Monitor, MicOff, Mic } from "lucide-react";
 import { Participant, Track } from "livekit-client";
+
+const FOCUS_RING =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500";
 
 interface ParticipantsListProps {
   isOpen: boolean;
   onClose: () => void;
-  localIdentity: string;
 }
 
-export function ParticipantsList({ isOpen, onClose, localIdentity }: ParticipantsListProps) {
-  const participants = useParticipants();
+export function ParticipantsList({ isOpen, onClose }: ParticipantsListProps) {
+  const remoteParticipants = useParticipants();
+  const { localParticipant } = useLocalParticipant();
+
+  // `useParticipants()` devolve apenas `room.remoteParticipants`; o
+  // participante local precisa ser composto à mão, senão a lista nunca mostra
+  // quem está lendo e o contador fica defasado em um.
+  const participants = useMemo(
+    () => (localParticipant ? [localParticipant, ...remoteParticipants] : remoteParticipants),
+    [localParticipant, remoteParticipants]
+  );
 
   if (!isOpen) return null;
 
@@ -26,7 +38,7 @@ export function ParticipantsList({ isOpen, onClose, localIdentity }: Participant
   };
 
   return (
-    <div className="flex h-full w-80 md:w-96 flex-col border-l border-border/80 bg-[#0d0f17] text-white shadow-2xl animate-in slide-in-from-right duration-200">
+    <div className="flex h-full w-full shrink-0 flex-col border-l border-border/80 bg-[#0d0f17] text-white shadow-2xl animate-in slide-in-from-right duration-200 sm:w-80 md:w-96">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border/60 px-4 py-3.5 bg-[#11131c]">
         <div className="flex items-center gap-2">
@@ -37,17 +49,19 @@ export function ParticipantsList({ isOpen, onClose, localIdentity }: Participant
           </span>
         </div>
         <button
+          type="button"
           onClick={onClose}
-          className="rounded-lg p-1 text-gray-400 hover:bg-secondary hover:text-white transition-colors"
+          aria-label="Fechar lista de participantes"
+          className={`rounded-lg p-1 text-gray-400 transition-colors hover:bg-secondary hover:text-white ${FOCUS_RING}`}
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
       {/* Participants list */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+      <div className="flex-1 space-y-2 overflow-y-auto p-3">
         {participants.map((p) => {
-          const isLocal = p.identity === localIdentity || p.isLocal;
+          const isLocal = p.isLocal === true;
           const micMuted = isTrackMuted(p, Track.Source.Microphone);
           const camMuted = isTrackMuted(p, Track.Source.Camera);
           const sharingScreen = hasScreenShare(p);
@@ -55,10 +69,10 @@ export function ParticipantsList({ isOpen, onClose, localIdentity }: Participant
           return (
             <div
               key={p.identity}
-              className="flex items-center justify-between rounded-xl bg-[#141724] border border-border/50 p-3 hover:border-indigo-500/30 transition-colors"
+              className="flex items-center justify-between rounded-xl border border-border/50 bg-[#141724] p-3 transition-colors hover:border-indigo-500/30"
             >
               <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600/20 text-indigo-300 font-bold text-sm border border-indigo-500/20">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-indigo-500/20 bg-indigo-600/20 text-sm font-bold text-indigo-300">
                   {(p.name || p.identity).charAt(0).toUpperCase()}
                 </div>
                 <div className="flex flex-col">
@@ -67,13 +81,13 @@ export function ParticipantsList({ isOpen, onClose, localIdentity }: Participant
                       {p.name || p.identity}
                     </span>
                     {isLocal && (
-                      <span className="text-[10px] font-medium text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20">
+                      <span className="rounded border border-indigo-500/20 bg-indigo-500/10 px-1.5 py-0.5 text-[10px] font-medium text-indigo-400">
                         Você
                       </span>
                     )}
                   </div>
                   {p.isSpeaking && (
-                    <span className="text-[10px] font-semibold text-emerald-400 flex items-center gap-1">
+                    <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-400">
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-ping" />
                       Falando...
                     </span>
@@ -84,25 +98,28 @@ export function ParticipantsList({ isOpen, onClose, localIdentity }: Participant
               {/* Status Icons */}
               <div className="flex items-center gap-2 text-gray-400">
                 {sharingScreen && (
-                  <div className="text-emerald-400 bg-emerald-500/10 p-1 rounded border border-emerald-500/20" title="Compartilhando tela">
+                  <div
+                    className="rounded border border-emerald-500/20 bg-emerald-500/10 p-1 text-emerald-400"
+                    title="Compartilhando tela"
+                  >
                     <Monitor className="h-3.5 w-3.5" />
                   </div>
                 )}
                 {camMuted ? (
-                  <div className="text-red-400 p-1" title="Câmera desligada">
+                  <div className="p-1 text-red-400" title="Câmera desligada">
                     <VideoOff className="h-3.5 w-3.5" />
                   </div>
                 ) : (
-                  <div className="text-gray-300 p-1" title="Câmera ligada">
+                  <div className="p-1 text-gray-300" title="Câmera ligada">
                     <Video className="h-3.5 w-3.5" />
                   </div>
                 )}
                 {micMuted ? (
-                  <div className="text-red-400 p-1" title="Microfone mudo">
+                  <div className="p-1 text-red-400" title="Microfone mudo">
                     <MicOff className="h-3.5 w-3.5" />
                   </div>
                 ) : (
-                  <div className="text-emerald-400 p-1" title="Microfone ativo">
+                  <div className="p-1 text-emerald-400" title="Microfone ativo">
                     <Mic className="h-3.5 w-3.5" />
                   </div>
                 )}

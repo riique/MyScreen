@@ -1,4 +1,5 @@
 import { AccessToken } from "livekit-server-sdk";
+import { env } from "@/lib/env";
 
 export interface TokenOptions {
   roomName: string;
@@ -13,13 +14,12 @@ export async function createLiveKitToken({
   participantName,
   isHost = false,
 }: TokenOptions): Promise<string> {
-  const apiKey = process.env.LIVEKIT_API_KEY || "myscreen_livekit_key";
-  const apiSecret = process.env.LIVEKIT_API_SECRET || "myscreen_livekit_secret_token_change_in_production";
-
-  const at = new AccessToken(apiKey, apiSecret, {
+  const at = new AccessToken(env.livekitApiKey, env.livekitApiSecret, {
     identity: participantIdentity,
     name: participantName,
-    ttl: "24h",
+    // 6h em vez de 24h: com o refresh no cliente em vigor, o pior caso de
+    // "morreu no meio da call" fica limitado pela janela de renovacao.
+    ttl: "6h",
   });
 
   at.addGrant({

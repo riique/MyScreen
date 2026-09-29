@@ -1,0 +1,90 @@
+# ==============================================================================
+# MyScreen — TEMPLATE de configuracao do LiveKit SFU
+#
+# Este arquivo NAO tem segredo e pode ser versionado. O `livekit.yaml` real
+# (que carrega o par de chaves) e gerado pelo `deploy.sh` a partir do `.env`
+# e NAO entra no git.
+#
+# Para criar o arquivo real:
+#     cp livekit.yaml.example livekit.yaml
+# e preencha o bloco `keys:` — ou, de preferencia, rode `sudo bash deploy.sh`,
+# que faz isso por voce e mantem o par sincronizado com o `.env`.
+#
+# O par de chaves PRECISA ser identico a LIVEKIT_API_KEY/LIVEKIT_API_SECRET do
+# `.env`. Se divergirem, o token e assinado com uma chave que o SFU nao conhece
+# e TODO JOIN FALHA com erro de assinatura.
+# ==============================================================================
+
+port: 7880
+bind_addresses:
+  - ""
+
+# --------------------------------------------------------------------------
+# TURN embutido (pion). Nao precisa de container coturn: o proprio SFU faz
+# o relay. Sem isto, quem esta atras de NAT simetrico, CGNAT (4G/5G) ou
+# firewall corporativo NAO tem caminho de relay nenhum — a falha de ICE direta
+# passa de 5-10% em banda larga geral para >30% em rede corporativa travada.
+#
+# O TURN NAO fica atras do Caddy: TURN/TLS e stream STUN cru, nao HTTP, e
+# roteamento por path e impossivel. `tls_port` so funciona sem L4 na frente.
+# Se um dia for preciso TURN em 443, o Caddy stock nao faz L4/SNI — exige build
+# custom com `caddy-l4`. Por enquanto `5349` dedicado resolve.
+#
+# O `deploy.sh` sobrescreve `domain:` com o valor de DOMAIN do `.env`.
+# --------------------------------------------------------------------------
+turn:
+  enabled: true
+  domain: turn.seudominio.com
+  udp_port: 3478
+  tls_port: 5349
+  relay_range_start: 61000
+  relay_range_end: 62000
+  # Impede que um participante autenticado esgote o range de relay dos demais.
+  per_user_relay_allocation_limit: 12
+
+# Metricas. O default do LiveKit e `port: 0`, ou seja, NAO EXISTE metrica
+# alguma na implantacao se estas linhas nao estiverem aqui.
+prometheus:
+  port: 9090
+
+debug_handler:
+  port: 9091
+
+rtc:
+  tcp_port: 7881
+  # 50000-60000 e nao 50000-50200: com tela + camera (ate 3 tracks cada) o
+  # range antigo esgota rapido. O compose e o UFW ja abriam 50000-60000 — o
+  # YAML e que estava errado.
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: true
+
+  # Cliente a 250 ms de RTT ia direto para ICE/TCP fadado por 5-15s antes de
+  # cair no TURN. Com o threshold, ele vai ao TURN na hora.
+  tcp_fallback_rtt_threshold: 300
+
+  stun_servers:
+    - stun.l.google.com:19302
+    - stun1.l.google.com:19302
+
+  # Cliente relayed custa ~5x mais syscalls de escrita. Lotes maiores cortam
+  # isso sem aumentar latencia percebida.
+  batch_io:
+    batch_size: 128
+    max_flush_interval: 2ms
+
+# PREENCHER. Gerar com:
+#   API_KEY="myscreen_$(openssl rand -hex 6)"
+#   API_SECRET="$(openssl rand -hex 32)"
+keys:
+  APIKEY_A_SUBSTITUIR: SEGREDO_A_SUBSTITUIR
+
+room:
+  empty_timeout: 300
+  max_participants: 100
+
+logging:
+  level: info
+  # Logs em JSON sao entregáveis (Query / Loki) sem inflar o volume de texto.
+  json: true
+  sample: true

@@ -1,36 +1,100 @@
 services:
+  # Aplica o schema ANTES do app atender trafego.
+  #
+  # O `npx prisma db push` que rodava dentro do container `app` nao podia
+  # funcionar: o stage `runner` do Dockerfile copia apenas `public`, `prisma`,
+  # `.next/standalone` e `.next/static`, e a CLI do Prisma e uma devDependency
+  # que nada importa — entao o `npx` resolvia o pacote do registry em tempo de
+  # deploy (ou falhava sem rede). Alem disso o schema era aplicado DEPOIS de o
+  # app ja responder: nesse intervalo todo endpoint que fala com o Prisma
+  # devolvia 500.
+  #
+  # Este servico usa o stage `deps` do Dockerfile, que tem a CLI pinada pelo
+  # package-lock, e roda uma vez e sai.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: deps
+    env_file:
+      - .env
+    # O path do SQLite e declarado AQUI, e nao no `.env`: um `file:./...`
+    # relativo e resolvido pelo Prisma contra o diretorio do schema
+    # (`/app/prisma/`), que nao e o volume `app-data:/app/data` — o banco
+    # nasceria fora do volume e sumiria a cada `up --build`, levando contas,
+    # senhas e salas junto.
+    environment:
+      DATABASE_URL: "file:/app/data/database.sqlite"
+    volumes:
+      - app-data:/app/data
+    command: ["npx", "--no-install", "prisma", "db", "push", "--skip-generate"]
+    restart: "no"
+    networks:
+      - myscreen-network
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=file:/app/data/database.sqlite
-      - JWT_SECRET=${JWT_SECRET:-myscreen_jwt_super_secret_replace_in_production_key_32chars}
-      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-myscreen_livekit_key}
-      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-myscreen_livekit_secret_token_change_in_production}
-      - LIVEKIT_URL=http://livekit:7880
-      - NEXT_PUBLIC_LIVEKIT_URL=${NEXT_PUBLIC_LIVEKIT_URL:-wss://${DOMAIN}}
+      DATABASE_URL: "file:/app/data/database.sqlite"
     volumes:
       - app-data:/app/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     networks:
       - myscreen-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # Rotacao de log nao e opcional: sem `max-size` o driver json-file cresce ate
+    # encher o disco — e quando o disco enche, o SQLite vai junto.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   livekit:
     image: livekit/livekit-server:latest
     restart: unless-stopped
     command: --config /etc/livekit.yaml
+    # NAO publique 7880/7881 em 0.0.0.0. O Caddy ja faz o front da sinalizacao
+    # (/rtc) e o 7880 responde token com roomAdmin. Alem disso, o Docker insere
+    # DNAT + chain DOCKER ANTES das regras do UFW: tudo que esta em `ports`
+    # fica alcancavel da internet mesmo com o firewall "fechado". Remover a
+    # exposicao e melhor do que remendar com regras DOCKER-USER.
+    #
+    # 3478/tcp e 5349/tcp sao o TURN (STUN e STUN/TLS). O range 50000-60000/udp
+    # e a midia WebRTC. Essas tres sao as unicas que o SFU precisa expor.
     ports:
-      - "7880:7880"
-      - "7881:7881"
       - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/tcp"
       - "50000-60000:50000-60000/udp"
+      - "61000-62000:61000-62000/udp"
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro
-    environment:
-      - LIVEKIT_KEYS=${LIVEKIT_API_KEY:-myscreen_livekit_key}: ${LIVEKIT_API_SECRET:-myscreen_livekit_secret_token_change_in_production}
     networks:
       - myscreen-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   caddy:
     image: caddy:2-alpine
@@ -46,10 +110,17 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
-      - app
-      - livekit
+      app:
+        condition: service_healthy
+      livekit:
+        condition: service_started
     networks:
       - myscreen-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   myscreen-network:

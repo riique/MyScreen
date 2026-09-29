@@ -1,35 +1,102 @@
 @import "tailwindcss";
+@plugin "tailwindcss-animate";
 
-@layer base {
-  :root {
-    --background: #090a0f;
-    --foreground: #f3f4f6;
-    --card: #11131a;
-    --card-foreground: #f3f4f6;
-    --popover: #11131a;
-    --popover-foreground: #f3f4f6;
-    --primary: #6366f1;
-    --primary-foreground: #ffffff;
-    --secondary: #1e2230;
-    --secondary-foreground: #e2e8f0;
-    --muted: #181b26;
-    --muted-foreground: #94a3b8;
-    --accent: #2e354b;
-    --accent-foreground: #ffffff;
-    --destructive: #ef4444;
-    --destructive-foreground: #ffffff;
-    --border: #232839;
-    --input: #232839;
-    --ring: #6366f1;
-    --radius: 0.75rem;
-  }
+/* ============================================================================
+   Design tokens
+
+   No Tailwind v4 so variáveis declaradas no bloco @theme com o namespace
+   correto geram utilitários. Um :root comum não emite nenhum.
+
+   Regra que manteve esta lista honesta: um token que ninguém usa é token
+   morto. A rampa de marca abaixo foi extraída do que o app REALMENTE usava
+   (indigo-600 no estado normal, indigo-500 no hover, indigo-400 no texto) —
+   com `--color-primary` valendo #6366f1 enquanto 146 usos de `indigo-*`
+   apareciam no código, ajustar o token não mudava nada na tela.
+   ========================================================================== */
+@theme {
+  /* --- Superfícies ---
+     Rampa medida no código: 16 literais hex near-duplicados (contraste entre
+     si de 1.002:1 a 1.05:1) para 3 tokens existentes. Estes valores absorvem
+     as quase-cópias; o delta visual de qualquer fusão é de no máximo 7/255 em
+     um canal (1.041:1), imperceptível. */
+  --color-background: #090a0f;
+  --color-surface: #0d0f17;
+  --color-surface-video: #0b0d14;
+  --color-surface-item: #181b26;
+  --color-card: #11131c;
+  --color-card-foreground: #f3f4f6;
+  --color-popover: #11131c;
+  --color-popover-foreground: #f3f4f6;
+  --color-secondary: #1e2230;
+  --color-secondary-foreground: #e2e8f0;
+  --color-muted: #181b26;
+  --color-muted-foreground: #94a3b8;
+
+  /* --- Marca --- */
+  --color-primary: #4f46e5;          /* indigo-600: estado normal */
+  --color-primary-hover: #6366f1;    /* indigo-500: hover/active */
+  --color-primary-soft: #818cf8;     /* indigo-400: texto e ícones */
+  --color-primary-foreground: #ffffff;
+
+  --color-accent: #2e354b;
+  --color-accent-foreground: #ffffff;
+
+  /* --- Semântica --- */
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+  --color-destructive-strong: #dc2626;
+  --color-success: #10b981;
+  --color-success-strong: #059669;
+  --color-warning: #f59e0b;
+  --color-warning-strong: #fbbf24;
+
+  /* Versões translúcidas: o app usava `bg-indigo-600/20`, `bg-red-500/10` etc.
+     em todo lugar, o que travava a identidade visual no palette do Tailwind. */
+  --color-primary-soft: rgb(79 70 229 / 0.2);
+  --color-primary-soft-strong: rgb(79 70 229 / 0.3);
+  --color-destructive-soft: rgb(239 68 68 / 0.1);
+  --color-warning-soft: rgb(245 158 11 / 0.1);
+  --color-success-soft: rgb(16 185 129 / 0.1);
+
+  --color-foreground: #f3f4f6;
+  --color-border: #232839;
+  --color-input: #232839;
+  --color-ring: #6366f1;
+
+  --radius-app: 0.75rem;
+
+  /* --- Sombras para superfície escura ---
+     O default do v4 (`shadow-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25)`) é
+     25% de preto sobre um fundo #090a0f: não produz contraste perceptível
+     nenhum, e o app usa sombra como metáfora de elevação em 22 lugares. A
+     técnica aqui é um realce superior (inset 1px de branco) em vez de só
+     difusão de preto — é o que dá leitura de camada em tema escuro. */
+  --shadow-raised: inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 8px 24px -12px rgb(0 0 0 / 0.9);
+  --shadow-overlay: inset 0 1px 0 0 rgb(255 255 255 / 0.07), 0 24px 48px -12px rgb(0 0 0 / 0.95);
+  --shadow-float: inset 0 1px 0 0 rgb(255 255 255 / 0.09), 0 12px 32px -8px rgb(0 0 0 / 0.9);
+  --shadow-brand: 0 8px 24px -8px rgb(79 70 229 / 0.55);
+}
+
+/* No mobile 100vh inclui a área da barra de endereço e corta o conteúdo;
+   100dvh acompanha a altura visível real. O 100vh fica como fallback. */
+html,
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 body {
-  background-color: var(--background);
-  color: var(--foreground);
+  background-color: var(--color-background);
+  color: var(--color-foreground);
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
-  overflow-x: hidden;
+  /* `clip` em vez de `hidden`: `hidden` no body cria contexto de rolagem e
+     mascara transbordo real em vez de impedir que ele exista. */
+  overflow-x: clip;
+}
+
+::selection {
+  background-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
+  color: var(--color-foreground);
 }
 
 /* Custom scrollbars */
@@ -48,30 +115,12 @@ body {
   background: #3b4360;
 }
 
-/* Custom LiveKit component overrides for dark elegance */
+/* Única classe do SDK LiveKit usada no app: o <VideoTrack> renderiza esta
+   classe. As demais (lk-participant-tile, lk-focus-layout, lk-grid-layout)
+   pertencem aos componentes da @livekit/components-react, que não são usados
+   aqui — regras para elas seriam CSS morto. */
 .lk-video-container {
   background-color: #0b0d14 !important;
   border-radius: 0.75rem;
   overflow: hidden;
-}
-
-.lk-participant-tile {
-  border-radius: 0.75rem !important;
-  border: 1px solid rgba(255, 255, 255, 0.07) !important;
-  background: #11141e !important;
-  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5) !important;
-}
-
-.lk-participant-tile:focus-within,
-.lk-participant-tile.lk-speaking {
-  border-color: #6366f1 !important;
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3) !important;
-}
-
-.lk-focus-layout {
-  gap: 1rem !important;
-}
-
-.lk-grid-layout {
-  gap: 1rem !important;
 }

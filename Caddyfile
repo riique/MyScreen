@@ -1,22 +1,63 @@
-{$DOMAIN:localhost} {
-    # LiveKit WebRTC Signaling & API
-    @livekit path /rtc* /twirp*
-    handle @livekit {
-        reverse_proxy livekit:7880 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-        }
-    }
+{
+	# Contato para o Let's Encrypt. Sem isso o Caddy usa o email da conta e o
+	# aviso de expiracao de certificado nunca chega a ninguem.
+	email {$ACME_EMAIL:admin@localhost}
+}
 
-    # Next.js Application
-    handle {
-        reverse_proxy app:3000 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-        }
-    }
+{$DOMAIN:localhost} {
+	encode zstd gzip
+
+	header {
+		# Sem HSTS, o primeiro acesso ainda sofre downgrade de HTTP.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# O app usa getUserMedia e getDisplayMedia: sem esta diretiva o
+		# navegador bloqueia camera/microscope em iframes de terceiros.
+		Permissions-Policy "camera=(self), microphone=(self), display-capture=(self)"
+		-Server
+	}
+
+	# Limite de corpo. Sem isso um POST gigante para /api/rooms e consumido
+	# inteiro em memoria antes de chegar no handler. O menor payload legitimo
+	# (cadastro) tem bem menos que 16 KB.
+	request_body {
+		max_size 16KB
+	}
+
+	# Rate limit NA BORDA: desligado de proposito.
+	#
+	# `rate_limit` nao e uma diretiva padrao do Caddy — ela exige o binario
+	# compilado com `github.com/mholt/caddy-ratelimit` via xcaddy. Na imagem
+	# oficial `caddy:2-alpine` o Caddy falha ao adaptar o Caddyfile ("unknown
+	# directive") e entra em crash-loop, derrubando 80/443. Manter o rate limit
+	# aqui exigiria um build custom da imagem, que e um novo ponto de falha
+	# operacional a cada `docker compose pull`.
+	#
+	# O limite vive no app (`src/lib/rate-limit.ts`), aplicado em todas as
+	# rotas de API, com teto de concorrencia da KDF — ver `src/lib/auth.ts`.
+	# `request_body` abaixo ja limita o consumo de memoria na borda, e essa
+	# diretiva E padrao.
+
+	# Somente a sinalizacao WebRTC (/rtc). `/twirp*` era a superficie de
+	# administracao do SFU exposta publicamente e nao e usada pelo cliente.
+	@livekit path /rtc*
+	handle @livekit {
+		reverse_proxy livekit:7880 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# Next.js Application
+	handle {
+		reverse_proxy app:3000 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
 }

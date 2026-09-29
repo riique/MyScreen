@@ -5,16 +5,22 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { LogIn, ArrowRight, Lock, Mail, AlertCircle } from "lucide-react";
 
+const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500";
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  /** Nome tecnico do campo culpado, vindo do `field` da resposta da API.
+   *  Sem isto, um erro de e-mail pintava a senha de vermelho e vice-versa. */
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setErrorField(null);
     setLoading(true);
 
     try {
@@ -27,6 +33,7 @@ export default function LoginPage() {
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Erro ao entrar.");
+        setErrorField(typeof data.field === "string" ? data.field : null);
         return;
       }
 
@@ -34,26 +41,31 @@ export default function LoginPage() {
       router.refresh();
     } catch {
       setError("Erro de conexão ao servidor.");
+      setErrorField(null);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center p-4">
+    <div className="flex min-h-[calc(100dvh-4rem)] items-center justify-center p-4">
       <div className="w-full max-w-md rounded-2xl border border-border/80 bg-[#11131c] p-8 shadow-2xl">
-        <div className="text-center mb-6">
-          <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600/20 text-indigo-400 mb-3">
+        <div className="mb-6 text-center">
+          <div className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600/20 text-indigo-400">
             <LogIn className="h-6 w-6" />
           </div>
           <h1 className="text-2xl font-bold text-white">Entrar no MyScreen</h1>
-          <p className="text-sm text-gray-400 mt-1">
+          <p className="mt-1 text-sm text-gray-400">
             Acesse seu painel e gerencie suas salas permanentes
           </p>
         </div>
 
         {error && (
-          <div className="mb-4 flex items-center gap-2 rounded-xl bg-red-950/60 border border-red-500/40 p-3 text-xs text-red-200">
+          <div
+            id="login-error"
+            role="alert"
+            className="mb-4 flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-950/60 p-3 text-xs text-red-200"
+          >
             <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
             <span>{error}</span>
           </div>
@@ -61,31 +73,53 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="text-xs font-medium text-gray-300 block mb-1.5">Email</label>
+            <label htmlFor="login-email" className="mb-1.5 block text-xs font-medium text-gray-300">
+              Email
+            </label>
             <div className="relative">
-              <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
+              <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
               <input
+                id="login-email"
+                name="email"
                 type="email"
                 required
+                autoComplete="email"
+                inputMode="email"
                 placeholder="seu@email.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-xl border border-border bg-[#181b26] pl-10 pr-4 py-2.5 text-sm text-white placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+                aria-invalid={errorField === "email" ? true : undefined}
+                aria-describedby={error ? "login-error" : undefined}
+                className={`w-full rounded-xl border border-border bg-[#181b26] py-2.5 pl-10 pr-4 text-sm text-white placeholder-gray-400 focus:border-indigo-500 focus:outline-none ${FOCUS_RING} ${
+                  errorField === "email" ? "border-red-500/70" : ""
+                }`}
               />
             </div>
           </div>
 
           <div>
-            <label className="text-xs font-medium text-gray-300 block mb-1.5">Senha</label>
+            <label
+              htmlFor="login-password"
+              className="mb-1.5 block text-xs font-medium text-gray-300"
+            >
+              Senha
+            </label>
             <div className="relative">
-              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
+              <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
               <input
+                id="login-password"
+                name="password"
                 type="password"
                 required
+                autoComplete="current-password"
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-xl border border-border bg-[#181b26] pl-10 pr-4 py-2.5 text-sm text-white placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+                aria-invalid={errorField === "password" ? true : undefined}
+                aria-describedby={error ? "login-error" : undefined}
+                className={`w-full rounded-xl border border-border bg-[#181b26] py-2.5 pl-10 pr-4 text-sm text-white placeholder-gray-400 focus:border-indigo-500 focus:outline-none ${FOCUS_RING} ${
+                  errorField === "password" ? "border-red-500/70" : ""
+                }`}
               />
             </div>
           </div>
@@ -93,7 +127,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full flex items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 hover:bg-indigo-500 disabled:opacity-50 transition-all cursor-pointer"
+            className={`flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 transition-all hover:bg-indigo-500 disabled:opacity-50 ${FOCUS_RING}`}
           >
             <span>{loading ? "Entrando..." : "Acessar Conta"}</span>
             <ArrowRight className="h-4 w-4" />
@@ -102,7 +136,10 @@ export default function LoginPage() {
 
         <p className="mt-6 text-center text-xs text-gray-400">
           Não tem uma conta?{" "}
-          <Link href="/register" className="text-indigo-400 hover:underline font-medium">
+          <Link
+            href="/register"
+            className={`rounded font-medium text-indigo-400 hover:underline ${FOCUS_RING}`}
+          >
             Cadastre-se gratuitamente
           </Link>
         </p>

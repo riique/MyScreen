@@ -1,0 +1,20 @@
+# Sem isso, `COPY . .` no Dockerfile embarca o `.env` (com os segredos) na
+# camada de build — e a camada vai para o registry junto com a imagem.
+node_modules
+.next
+.git
+.gitignore
+
+.env
+.env*
+!.env.example
+
+data
+*.sqlite
+*.sqlite-journal
+
+Dockerfile*
+docker-compose*.yml
+deploy.sh
+README.md
+tsconfig.tsbuildinfo
