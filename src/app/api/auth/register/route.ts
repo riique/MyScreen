@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { hashPassword, signToken, sessionCookieOptions, SESSION_COOKIE } from "@/lib/auth";
+import {
+  BCRYPT_MAX_BYTES,
+  exceedsBcryptLimit,
+  hashPassword,
+  signToken,
+  sessionCookieOptions,
+  SESSION_COOKIE,
+} from "@/lib/auth";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { EMAIL_PATTERN, HttpError, str, withErrorHandling } from "@/lib/validate";
-
-/**
- * Limite do bcrypt: 72 bytes. Acima disso o hash nao fica mais seguro, o
- * truncamento e silencioso — e ainda assim o servidor gasta CPU com o resto.
- */
-const BCRYPT_MAX_BYTES = 72;
 
 async function handleRegister(req: Request): Promise<NextResponse> {
   enforceRateLimit(req, "register", 5, 60 * 60_000);
@@ -20,7 +21,7 @@ async function handleRegister(req: Request): Promise<NextResponse> {
   // limite em UTF-8 sem o transporte rejeitar.
   const password = str(body, "password", { min: 10, max: BCRYPT_MAX_BYTES });
 
-  if (Buffer.byteLength(password, "utf8") > BCRYPT_MAX_BYTES) {
+  if (exceedsBcryptLimit(password)) {
     throw new HttpError(400, "A senha deve ter no máximo 72 bytes.");
   }
 

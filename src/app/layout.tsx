@@ -1,9 +1,26 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
+import { Archivo, Spline_Sans_Mono } from "next/font/google";
 import "./globals.css";
 import { Navbar } from "@/components/Navbar";
 
-const inter = Inter({ subsets: ["latin"] });
+/**
+ * Duas faces, um trabalho cada. Archivo tem osso de grotesk impressa e Caps que
+ * aguentam a coluna; Spline Sans Mono tem algarismo tabular de verdade, que e o
+ * que segura valor de coluna numa folha pautada. Nenhuma das duas e fallback de
+ * sistema: a voz da pagina e delas.
+ */
+const archivo = Archivo({
+  subsets: ["latin"],
+  variable: "--font-archivo",
+  display: "swap",
+});
+
+const splineMono = Spline_Sans_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-spline-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "MyScreen — Transmissão de Tela, Câmera e Áudio em Tempo Real",
@@ -17,17 +34,11 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pt-BR" className="dark">
-      <body
-        className={`${inter.className} min-h-dvh bg-[#090a0f] text-foreground antialiased`}
-      >
-        <div className="relative flex min-h-dvh flex-col">
+    <html lang="pt-BR" className={`${archivo.variable} ${splineMono.variable}`}>
+      <body className="min-h-dvh bg-paper font-sans text-ink antialiased">
+        <div className="flex min-h-dvh flex-col">
           <Navbar />
           <main className="flex-1">{children}</main>
         </div>

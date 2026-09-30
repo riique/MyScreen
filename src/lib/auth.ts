@@ -50,6 +50,28 @@ function releaseKdf(): void {
   else kdfActive -= 1;
 }
 
+/**
+ * Limite do bcrypt: 72 BYTES, nao 72 caracteres.
+ *
+ * Acima disso o hash TRUNCA EM SILENCIO (`bcryptjs` documenta em
+ * `truncates()`), o que significa que "A"*72 e "A"*72 + qualquer sufixo
+ * comparam como iguais: quem conhece os 72 primeiros bytes da senha da vitima
+ * autentica com qualquer resto, e o servidor responde 200 emitindo cookie.
+ *
+ * Centralizado porque a contagem correta e em BYTES. Um `max: 72` em
+ * caracteres deixa passar senha multibyte que estoura o limite no encode
+ * UTF-8 — 24 "e" acentuados tem 24 caracteres e 46 bytes; 36 tem 36 e 69;
+ * 40 tem 40 e 76. E o numero de bytes, nao o de caracteres, que o bcrypt
+ * trunca.
+ */
+export const BCRYPT_MAX_BYTES = 72;
+
+/** `true` se a senha estoura o limite do bcrypt. Rejeitar no request e sempre
+ *  melhor do que truncar: truncar aceita, rejeitar nao. */
+export function exceedsBcryptLimit(password: string): boolean {
+  return Buffer.byteLength(password, "utf8") > BCRYPT_MAX_BYTES;
+}
+
 export async function hashPassword(password: string): Promise<string> {
   await acquireKdf();
   try {

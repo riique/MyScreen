@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser, hashPassword } from "@/lib/auth";
+import { BCRYPT_MAX_BYTES, exceedsBcryptLimit, getSessionUser, hashPassword } from "@/lib/auth";
 import { generateRoomId } from "@/lib/utils";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { str, withErrorHandling } from "@/lib/validate";
 
-/** Limite do bcrypt: 72 bytes. Acima disso o hash nao fica mais seguro. */
-const BCRYPT_MAX_BYTES = 72;
 const CUSTOM_ID_PATTERN = /^[a-zA-Z0-9-]+$/;
 
 async function handleCreate(req: Request): Promise<NextResponse> {
@@ -20,9 +18,9 @@ async function handleCreate(req: Request): Promise<NextResponse> {
   // `hashPassword` (bcrypt custo 12) roda por requisicao: um payload sem teto
   // de tamanho vira DoS de CPU, nao so de banda.
   const rawPassword = typeof body.password === "string" ? body.password.trim() : "";
-  if (Buffer.byteLength(rawPassword, "utf8") > BCRYPT_MAX_BYTES) {
+  if (exceedsBcryptLimit(rawPassword)) {
     return NextResponse.json(
-      { error: `A senha deve ter no máximo ${BCRYPT_MAX_BYTES} caracteres.` },
+      { error: `A senha deve ter no máximo ${BCRYPT_MAX_BYTES} bytes.` },
       { status: 400 }
     );
   }
@@ -78,7 +76,9 @@ async function handleCreate(req: Request): Promise<NextResponse> {
   });
 }
 
-async function handleList(): Promise<NextResponse> {
+async function handleList(req: Request): Promise<NextResponse> {
+  enforceRateLimit(req, "rooms-list", 60, 60_000);
+
   const session = await getSessionUser();
   if (!session) {
     // 401 e nao 200 com lista vazia: sem isso o painel nao distingue "voce nao

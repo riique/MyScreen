@@ -1,16 +1,13 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
 import {
   LiveKitRoom,
   RoomAudioRenderer,
-  useTracks,
-  useLocalParticipant,
-  useParticipants,
-  VideoTrack,
   isTrackReference,
   useConnectionState,
   useRoomContext,
+  useTracks,
+  VideoTrack,
 } from "@livekit/components-react";
 import {
   ConnectionQuality,
@@ -24,36 +21,17 @@ import {
   type TrackPublishOptions,
 } from "livekit-client";
 import { useRouter } from "next/navigation";
-import { MediaControls } from "./MediaControls";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatSidebar } from "./ChatSidebar";
+import { MediaControls } from "./MediaControls";
 import { ParticipantsList } from "./ParticipantsList";
-import { SettingsModal, MediaSettings } from "./SettingsModal";
+import { SettingsModal, type MediaSettings } from "./SettingsModal";
 import { TrackStatsDropdown } from "./TrackStatsDropdown";
-import { AlertCircle, Maximize2, Mic, MicOff, Monitor, X } from "lucide-react";
+import { consumeCapture } from "@/components/site/capturePrefs";
+import { Stamp } from "@/components/sheet";
+import { ChevronLeft, LogOut, Maximize2, MessageSquare, Users } from "lucide-react";
 
-interface ConferenceRoomProps {
-  token: string;
-  serverUrl: string;
-  initialAudioEnabled?: boolean;
-  initialVideoEnabled?: boolean;
-  initialAudioDeviceId?: string;
-  initialVideoDeviceId?: string;
-}
-
-/** Lê `name` de um erro desconhecido sem recorrer a `any`. */
-function getErrorName(error: unknown): string | undefined {
-  if (error instanceof Error) return error.name;
-  if (typeof error === "object" && error !== null && "name" in error) {
-    const { name } = error as { name?: unknown };
-    return typeof name === "string" ? name : undefined;
-  }
-  return undefined;
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
+/** Nomes de erro de mídia que valem uma explicação, e não um "erro desconhecido". */
 const MEDIA_ERROR_NAMES = new Set([
   "NotReadableError",
   "NotAllowedError",
@@ -63,6 +41,37 @@ const MEDIA_ERROR_NAMES = new Set([
   "AbortError",
 ]);
 
+function getErrorName(error: unknown): string | undefined {
+  return error instanceof Error && MEDIA_ERROR_NAMES.has(error.name) ? error.name : undefined;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+const RESOLUTION: Record<MediaSettings["screenResolution"], { width: number; height: number }> = {
+  "720p": { width: 1280, height: 720 },
+  "1080p": { width: 1920, height: 1080 },
+  "4k": { width: 3840, height: 2160 },
+};
+
+export interface ConferenceRoomProps {
+  token: string;
+  serverUrl: string;
+  initialAudioEnabled?: boolean;
+  initialVideoEnabled?: boolean;
+  initialAudioDeviceId?: string;
+  initialVideoDeviceId?: string;
+}
+
+/**
+ * A sala é uma folha com um instrumento montado nela.
+ *
+ * O papel é branco e pautado; o monitor é escuro, e isso não é uma concessão ao
+ * tema antigo. É a mesma lógica de quem julga imagem: a face de um scope é
+ * escura de propósito, porque é contra um fundo neutro que se avalia o que está
+ * sendo mostrado. Ao redor do monitor, tudo é régua.
+ */
 export function ConferenceRoom({
   token,
   serverUrl,
@@ -74,122 +83,100 @@ export function ConferenceRoom({
   const router = useRouter();
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  // Uma saída pedida pelo usuário não é queda de conexão: sem isto, o botão
+  // Sair dispararia o banner de erro logo depois de funcionar.
   const userInitiatedLeave = useRef(false);
 
-  // `onError` do <LiveKitRoom> NÃO é só de conexão: o handler interno de
-  // `RoomEvent.SignalConnected` faz `Promise.all([setMicrophoneEnabled,
-  // setCameraEnabled, setScreenShareEnabled])` e manda o `.catch` para o mesmo
-  // `onError`. Um `NotReadableError` de microfone (comum quando outro app está
-  // com o device aberto) abria o modal full-screen "Conexão Interrompida" e
-  // travava a chamada inteira, sem caminho para "entrar mudo".
-  const handleOnError = useCallback((e: Error) => {
-    // Erros de captura de mídia chegam no MESMO `onError`: o handler interno de
-    // `RoomEvent.SignalConnected` roda `Promise.all([setMicrophoneEnabled,
-    // setCameraEnabled, setScreenShareEnabled])` e manda o `.catch` para cá
-    // (@livekit/components-react/dist/room-Bfb4OWAI.mjs:3876-3882). Eles não
-    // derrubam a conexão e não podem virar modal full-screen — um microfone em
-    // uso por outro app matava a chamada inteira, sem caminho para "entrar mudo".
-    if (MEDIA_ERROR_NAMES.has(e.name)) {
-      setMediaError(
-        `Não foi possível abrir um dispositivo (${e.name}). Você entrou sem ele — ` +
-          `pode tentar de novo em Configurações de mídia.`
-      );
-      return;
-    }
-    setFatalError(e.message);
-  }, []);
+  function handleOnError(error: Error) {
+    console.error("LiveKit Room disconnected:", error);
+    if (userInitiatedLeave.current) return;
+    const name = getErrorName(error);
+    setFatalError(
+      name
+        ? `Não foi possível abrir um dispositivo (${name}). Você entrou sem ele — pode tentar de novo em Configurações de mídia.`
+        : "A conexão com a conferência foi interrompida.",
+    );
+  }
 
-  const handleOnConnected = useCallback(() => {
-    setFatalError(null);
-    setMediaError(null);
-  }, []);
-
-  const handleOnDisconnected = useCallback(
-    (reason?: DisconnectReason) => {
-      console.warn("LiveKit Room disconnected:", reason);
-      if (userInitiatedLeave.current) {
-        router.push("/");
-      } else {
-        setFatalError("A conexão com a conferência foi interrompida.");
-      }
-    },
-    [router]
-  );
+  function handleOnDisconnected(reason?: DisconnectReason) {
+    // O motivo é a única pista de por que a sala caiu: participante removido,
+    // token expirado ou SFU reiniciado dão consertos completamente diferentes.
+    console.info("LiveKit encerrado. Motivo:", reason ?? "desconhecido");
+    if (userInitiatedLeave.current) return;
+    setFatalError("A conexão com a conferência foi interrompida.");
+  }
 
   return (
-    <LiveKitRoom
-      token={token}
-      serverUrl={serverUrl}
-      connect={true}
-      audio={
-        initialAudioEnabled
-          ? {
-              deviceId: initialAudioDeviceId,
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-            }
-          : false
-      }
-      video={initialVideoEnabled ? { deviceId: initialVideoDeviceId } : false}
-      options={{
-        // pixelDensity 1: o default do SDK é 2 em telas densas, o que faz cada
-        // tile pequeno pedir a camada simulcast "top" e anula o ganho do adaptive stream.
-        adaptiveStream: { pixelDensity: 1, pauseVideoInBackground: true },
-        dynacast: true,
-        // Um único AudioContext para todos os áudios remotos: resolve o autoplay
-        // block do iOS e é o que habilita switchActiveDevice("audiooutput", ...).
-        webAudioMix: true,
-        stopLocalTrackOnUnpublish: true,
-        publishDefaults: {
-          screenShareEncoding: { maxBitrate: 2_500_000, maxFramerate: 30, priority: "high" },
-          degradationPreference: "maintain-resolution",
-        },
-      }}
-      onError={handleOnError}
-      onConnected={handleOnConnected}
-      onDisconnected={handleOnDisconnected}
-      className="relative flex h-[calc(100dvh-4rem)] w-full overflow-hidden bg-[#07080c] select-none"
-    >
-      {fatalError && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
-          <div className="flex max-w-sm flex-col items-center gap-4 rounded-2xl border border-red-500/30 bg-[#0f111a] p-6 text-center shadow-2xl">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10 text-red-400">
-              <AlertCircle className="h-6 w-6" />
-            </div>
-            <h3 className="text-lg font-bold text-white">Conexão Interrompida</h3>
-            <p className="text-sm text-gray-400">{fatalError}</p>
-            <div className="flex w-full gap-3 pt-2">
+    <>
+      <LiveKitRoom
+        token={token}
+        serverUrl={serverUrl}
+        connect
+        audio={
+          initialAudioEnabled
+            ? {
+                deviceId: initialAudioDeviceId,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              }
+            : false
+        }
+        video={initialVideoEnabled ? { deviceId: initialVideoDeviceId } : false}
+        onError={handleOnError}
+        onConnected={() => setFatalError(null)}
+        onDisconnected={handleOnDisconnected}
+        options={{
+          adaptiveStream: { pixelDensity: 1, pauseVideoInBackground: true },
+          dynacast: true,
+          webAudioMix: true,
+          stopLocalTrackOnUnpublish: true,
+          publishDefaults: {
+            screenShareEncoding: { maxBitrate: 2_500_000, maxFramerate: 30, priority: "high" },
+            degradationPreference: "maintain-resolution",
+          },
+        }}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <RoomAudioRenderer />
+        <ConferenceStage
+          token={token}
+          mediaError={mediaError}
+          onDismissMediaError={() => setMediaError(null)}
+          onLeave={() => {
+            userInitiatedLeave.current = true;
+            router.push("/");
+          }}
+        />
+      </LiveKitRoom>
+
+      {fatalError ? (
+        <div
+          role="alert"
+          className="fixed inset-x-0 bottom-0 z-50 border-t border-rule bg-sheet px-4 py-3 sm:px-6"
+        >
+          <div className="mx-auto flex max-w-[80rem] flex-wrap items-center justify-between gap-3">
+            <p className="text-[0.875rem] text-alert">{fatalError}</p>
+            <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => window.location.reload()}
-                className="flex-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors"
+                className="border border-rule-2 bg-sheet px-3 py-1.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:bg-band [border-radius:var(--radius-sheet)]"
               >
                 Reconectar
               </button>
               <button
                 type="button"
                 onClick={() => router.push("/")}
-                className="flex-1 rounded-xl border border-gray-700 bg-gray-800/80 px-4 py-2.5 text-sm font-semibold text-gray-300 hover:bg-gray-800 transition-colors"
+                className="border border-transparent px-3 py-1.5 text-[0.8125rem] text-ink-2 transition-colors hover:text-ink [border-radius:var(--radius-sheet)]"
               >
                 Início
               </button>
             </div>
           </div>
         </div>
-      )}
-      <ConferenceStage
-        token={token}
-        mediaError={mediaError}
-        onDismissMediaError={() => setMediaError(null)}
-        initialAudioDeviceId={initialAudioDeviceId}
-        initialVideoDeviceId={initialVideoDeviceId}
-        onLeave={() => {
-          userInitiatedLeave.current = true;
-        }}
-      />
-      <RoomAudioRenderer />
-    </LiveKitRoom>
+      ) : null}
+    </>
   );
 }
 
@@ -197,93 +184,79 @@ function ConferenceStage({
   token,
   mediaError,
   onDismissMediaError,
-  initialAudioDeviceId,
-  initialVideoDeviceId,
   onLeave,
 }: {
   token: string;
   mediaError: string | null;
   onDismissMediaError: () => void;
-  initialAudioDeviceId?: string;
-  initialVideoDeviceId?: string;
-  onLeave?: () => void;
+  onLeave: () => void;
 }) {
   const router = useRouter();
-  const { localParticipant } = useLocalParticipant();
-  const participants = useParticipants();
-  const connectionState = useConnectionState();
   const room = useRoomContext();
+  const localParticipant = room.localParticipant;
+  const connectionState = useConnectionState();
 
-  // Panels state
+  // A régua chega do lobby já posicionada: quem mexeu na banda da home entra
+  // com a mesma escolha, e a folha não repete a pergunta.
+  const [settings, setSettings] = useState<MediaSettings>(() => {
+    const prefs = consumeCapture();
+    return {
+      screenFps: Number(prefs.frameRate),
+      screenResolution: prefs.resolution,
+      screenContentType: prefs.contentHint,
+      systemAudio: prefs.systemAudio,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+  });
+  // `applyMediaSettings` é async e lê a régua no momento da aplicação; sem um
+  // espelho síncrono, dois ajustes seguidos partiriam do mesmo estado velho.
+  const settingsRef = useRef<MediaSettings>(settings);
+
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isFocusLayout, setIsFocusLayout] = useState(true);
-
-  // Banners / avisos
+  const [isStatsOpen, setIsStatsOpen] = useState(false);
   const [unstableConnection, setUnstableConnection] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [screenShareError, setScreenShareError] = useState<string | null>(null);
-
-  // Advanced media settings state
-  const [settings, setSettings] = useState<MediaSettings>({
-    screenFps: 60,
-    screenResolution: "1080p",
-    screenContentType: "detail",
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-    audioInputId: initialAudioDeviceId,
-    videoInputId: initialVideoDeviceId,
+  const [devices, setDevices] = useState({
+    audioInputs: [] as MediaDeviceInfo[],
+    videoInputs: [] as MediaDeviceInfo[],
+    audioOutputs: [] as MediaDeviceInfo[],
   });
 
-  // Espelho síncrono de `settings` para o callback de atualização (evita stale closure)
-  const settingsRef = useRef(settings);
-  useEffect(() => {
-    settingsRef.current = settings;
-  }, [settings]);
+  const tracks = useTracks(
+    [
+      { source: Track.Source.Camera, withPlaceholder: true },
+      { source: Track.Source.ScreenShare, withPlaceholder: false },
+    ],
+    { onlySubscribed: false },
+  );
 
-  // Devices list
-  const [devices, setDevices] = useState<{
-    audioInputs: MediaDeviceInfo[];
-    videoInputs: MediaDeviceInfo[];
-    audioOutputs: MediaDeviceInfo[];
-  }>({
-    audioInputs: [],
-    videoInputs: [],
-    audioOutputs: [],
-  });
+  // `useTracks` devolve placeholders para câmera ainda não prevista. O
+  // `<VideoTrack>` e o painel de estatísticas só querem tracks de verdade, e
+  // passar o guard direto ao `filter` é o que estreita o tipo do elemento.
+  const subscribed = tracks.filter(isTrackReference);
+  const screenShareRefs = subscribed.filter((t) => t.source === Track.Source.ScreenShare);
+  const cameraRefs = subscribed.filter((t) => t.source === Track.Source.Camera);
+
+  const isMicOn = localParticipant.isMicrophoneEnabled;
+  const isCamOn = localParticipant.isCameraEnabled;
+  const isScreenSharing = localParticipant.isScreenShareEnabled;
+  const hasActiveScreenShare = screenShareRefs.length > 0;
 
   const loadDevices = useCallback(async () => {
     try {
-      const devs = await navigator.mediaDevices.enumerateDevices();
-      const audioInputs = devs.filter((d) => d.kind === "audioinput");
-      const videoInputs = devs.filter((d) => d.kind === "videoinput");
+      const list = await navigator.mediaDevices.enumerateDevices();
       setDevices({
-        audioInputs,
-        videoInputs,
-        audioOutputs: devs.filter((d) => d.kind === "audiooutput"),
+        audioInputs: list.filter((d) => d.kind === "audioinput"),
+        videoInputs: list.filter((d) => d.kind === "videoinput"),
+        audioOutputs: list.filter((d) => d.kind === "audiooutput"),
       });
-
-      // Hot-unplug: o SDK volta a track viva para `default` sozinho, mas nosso
-      // estado ficaria com um deviceId morto — e `toggleMic` o passaria por
-      // cima do default em `createTracks`, fazendo o `getUserMedia` lancar
-      // NotFoundError e o microfone morrer para o resto da sessao.
-      const current = settingsRef.current;
-      const stale: Partial<MediaSettings> = {};
-      if (current.audioInputId && !audioInputs.some((d) => d.deviceId === current.audioInputId)) {
-        stale.audioInputId = undefined;
-      }
-      if (current.videoInputId && !videoInputs.some((d) => d.deviceId === current.videoInputId)) {
-        stale.videoInputId = undefined;
-      }
-      if (Object.keys(stale).length > 0) {
-        const reconciled = { ...current, ...stale };
-        settingsRef.current = reconciled;
-        setSettings(reconciled);
-      }
-    } catch (e) {
-      console.warn("Could not enumerate devices:", e);
+    } catch (error) {
+      console.error("Could not enumerate devices:", error);
     }
   }, []);
 
@@ -291,592 +264,542 @@ function ConferenceStage({
     void loadDevices();
   }, [loadDevices]);
 
-  // Refresh de token: o prop `token` sozinho NÃO renova nada.
-  // O efeito de conexão do <LiveKitRoom> tem `token` nas deps e chama
-  // `room.connect()`, mas `Room.connect` faz early-return quando a sala já
-  // está conectada (livekit-client.esm.mjs:33682-33686) — o token novo é
-  // jogado no lixo e o motor continua usando o do join original, que expira
-  // em 6h e derruba a call na primeira queda real de rede.
-  //
-  // O SDK 2.9 não expõe setter público de token no `Room` (o único
-  // `updateToken` é de `RegionUrlProvider`, outra classe). `RTCEngine.token` é
-  // o valor lido em cada `resumeConnection`/`restartConnection`, e é `private`
-  // no .d.ts — daí o cast estreito. Se o SDK passar a expor isso, trocar aqui.
   useEffect(() => {
-    if (room.state !== ConnectionState.Connected) return;
+    settingsRef.current = settings;
+  }, [settings]);
+
+  // O token do LiveKit expira; sem trocar o token da engine, o SFU derruba a
+  // sala na renewal seguinte mesmo com tudo saudável.
+  useEffect(() => {
     (room as unknown as { engine: { token: string } }).engine.token = token;
   }, [room, token]);
 
-  // Não há listener para o `EngineEvent.TokenRefreshed`: o próprio motor já
-  // escreve o token novo em `this.token` antes de emitir o evento
-  // (livekit-client.esm.mjs:24520-24523), e esse é o valor lido no rejoin.
-
-  // Assinaturas do Room — on/off pareados no cleanup
   useEffect(() => {
-    const handleConnectionQualityChanged = (
-      quality: ConnectionQuality,
-      participant: Participant
-    ) => {
-      if (participant.isLocal) {
-        setUnstableConnection(quality === ConnectionQuality.Poor);
-      }
-    };
-
-    const handleAudioPlaybackStatusChanged = (playing: boolean) => {
-      // O evento só dispara com `false` quando o navegador bloqueou a reprodução.
+    function onQuality(quality: ConnectionQuality, participant: Participant) {
+      if (participant.isLocal && quality === ConnectionQuality.Poor) setUnstableConnection(true);
+    }
+    function onAudioPlayback(playing: boolean) {
       setAudioBlocked(!playing);
-    };
-
-    const handleMediaDevicesChanged = () => {
-      // Hot-unplug de headset/headset USB
+    }
+    function onDevices() {
       void loadDevices();
-    };
+    }
 
-    room.on(RoomEvent.ConnectionQualityChanged, handleConnectionQualityChanged);
-    room.on(RoomEvent.AudioPlaybackStatusChanged, handleAudioPlaybackStatusChanged);
-    room.on(RoomEvent.MediaDevicesChanged, handleMediaDevicesChanged);
+    room
+      .on(RoomEvent.ConnectionQualityChanged, onQuality)
+      .on(RoomEvent.AudioPlaybackStatusChanged, onAudioPlayback)
+      .on(RoomEvent.MediaDevicesChanged, onDevices);
 
     return () => {
-      room.off(RoomEvent.ConnectionQualityChanged, handleConnectionQualityChanged);
-      room.off(RoomEvent.AudioPlaybackStatusChanged, handleAudioPlaybackStatusChanged);
-      room.off(RoomEvent.MediaDevicesChanged, handleMediaDevicesChanged);
+      room
+        .off(RoomEvent.ConnectionQualityChanged, onQuality)
+        .off(RoomEvent.AudioPlaybackStatusChanged, onAudioPlayback)
+        .off(RoomEvent.MediaDevicesChanged, onDevices);
     };
   }, [room, loadDevices]);
 
-  // Fetch all video and screen share tracks
-  const tracks = useTracks(
-    [
-      { source: Track.Source.Camera, withPlaceholder: true },
-      { source: Track.Source.ScreenShare, withPlaceholder: false },
-    ],
-    { onlySubscribed: false }
-  );
-
-  // Screen share tracks across participants
-  const screenShareTracks = tracks.filter(
-    (t) => t.source === Track.Source.ScreenShare && t.publication?.track
-  );
-
-  // Camera tracks across participants
-  const cameraTracks = tracks.filter((t) => t.source === Track.Source.Camera);
-
-  const isMicOn = localParticipant.isMicrophoneEnabled;
-  const isCamOn = localParticipant.isCameraEnabled;
-  const isScreenSharing = localParticipant.isScreenShareEnabled;
-
   const toggleMic = useCallback(async () => {
+    const current = settingsRef.current;
     try {
       await localParticipant.setMicrophoneEnabled(!isMicOn, {
-        deviceId: settings.audioInputId,
-        echoCancellation: settings.echoCancellation,
-        noiseSuppression: settings.noiseSuppression,
-        autoGainControl: settings.autoGainControl,
+        deviceId: current.audioInputId,
+        echoCancellation: current.echoCancellation,
+        noiseSuppression: current.noiseSuppression,
+        autoGainControl: current.autoGainControl,
       });
-    } catch (err) {
-      console.error("Erro ao alternar microfone:", err);
+    } catch (error) {
+      console.error("Erro ao alternar microfone:", error);
+      throw new Error("O navegador recusou o microfone selecionado.");
     }
-  }, [localParticipant, isMicOn, settings]);
+  }, [localParticipant, isMicOn]);
 
   const toggleCam = useCallback(async () => {
     try {
       await localParticipant.setCameraEnabled(!isCamOn, {
-        deviceId: settings.videoInputId,
+        deviceId: settingsRef.current.videoInputId,
       });
-    } catch (err) {
-      console.error("Erro ao alternar câmera:", err);
+    } catch (error) {
+      console.error("Erro ao alternar câmera:", error);
+      throw new Error("O navegador recusou a câmera selecionada.");
     }
-  }, [localParticipant, isCamOn, settings.videoInputId]);
+  }, [localParticipant, isCamOn]);
 
   const toggleScreenShare = useCallback(async () => {
-    setScreenShareError(null);
+    const current = settingsRef.current;
+    if (isScreenSharing) {
+      try {
+        await localParticipant.setScreenShareEnabled(false);
+      } catch (error) {
+        console.error("Erro ao compartilhar tela:", error);
+      }
+      return;
+    }
+
+    const is4k = current.screenResolution === "4k";
+    const { width, height } = RESOLUTION[current.screenResolution];
+    const contentHint = current.screenContentType === "detail" ? "detail" : "motion";
+    const publishOptions: TrackPublishOptions = {
+      screenShareEncoding: {
+        maxBitrate: is4k ? 5_000_000 : 2_500_000,
+        maxFramerate: current.screenFps,
+        priority: "high",
+      },
+      simulcast: is4k,
+      degradationPreference: "maintain-resolution",
+    };
+
     try {
-      const nextState = !isScreenSharing;
-      if (nextState) {
-        const is4k = settings.screenResolution === "4k";
-        const resolution = is4k
-          ? { width: 3840, height: 2160, frameRate: settings.screenFps }
-          : settings.screenResolution === "720p"
-          ? { width: 1280, height: 720, frameRate: settings.screenFps }
-          : { width: 1920, height: 1080, frameRate: settings.screenFps };
-
-        // "detail" preserva nitidez (texto/IDE/UI); "motion" preserva fluidez
-        // (vídeo/jogo). O default correto para quem demonstra software é "detail".
-        const contentHint = settings.screenContentType === "detail" ? "detail" : "motion";
-
-        // Sem este 3º argumento o SDK usa ScreenSharePresets.h1080fps15.encoding
-        // (2,5 Mbps / 15 fps) e a tela vira ilegível em 4K.
-        const publishOptions: TrackPublishOptions = {
-          screenShareEncoding: {
-            maxBitrate: is4k ? 5_000_000 : 2_500_000,
-            maxFramerate: settings.screenFps,
-            priority: "high",
-          },
-          simulcast: is4k,
-          degradationPreference: "maintain-resolution",
-        };
-
+      await localParticipant.setScreenShareEnabled(
+        true,
+        {
+          audio: current.systemAudio,
+          contentHint,
+          resolution: { width, height, frameRate: current.screenFps },
+        },
+        publishOptions,
+      );
+      setScreenShareError(null);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      // O Windows em modo exclusivo recusa a faixa de áudio do sistema, mas a
+      // tela ainda pode ir. Perder a chamada inteira por causa do som seria
+      // cobrar caro demais por um recurso opcional.
+      if (
+        current.systemAudio &&
+        (getErrorName(error) === "NotReadableError" || /audio/i.test(message))
+      ) {
         try {
-          // Publish Screen Share WITH Audio and chosen FPS / Resolution
           await localParticipant.setScreenShareEnabled(
             true,
-            { audio: true, contentHint, resolution },
-            publishOptions
+            {
+              audio: false,
+              contentHint,
+              resolution: { width, height, frameRate: current.screenFps },
+            },
+            publishOptions,
           );
-        } catch (audioErr: unknown) {
-          if (
-            getErrorName(audioErr) === "NotReadableError" ||
-            getErrorMessage(audioErr).toLowerCase().includes("audio")
-          ) {
-            console.warn(
-              "Áudio do sistema não pôde ser capturado (modo exclusivo do Windows). Compartilhando apenas o vídeo...",
-              audioErr
-            );
-            // O fallback precisa das MESMAS publishOptions — sem elas o bug volta
-            // silenciosamente.
-            await localParticipant.setScreenShareEnabled(
-              true,
-              { audio: false, contentHint, resolution },
-              publishOptions
-            );
-          } else {
-            throw audioErr;
-          }
+          setScreenShareError(
+            "Áudio do sistema não pôde ser capturado (modo exclusivo do Windows). Compartilhando apenas o vídeo...",
+          );
+          return;
+        } catch (fallbackError) {
+          console.error("Erro ao compartilhar tela:", fallbackError);
+          setScreenShareError(
+            `Não foi possível compartilhar a tela: ${getErrorMessage(fallbackError)}`,
+          );
+          return;
         }
-      } else {
-        await localParticipant.setScreenShareEnabled(false);
       }
-    } catch (err: unknown) {
-      // NotAllowedError = o usuário cancelou o seletor de tela. Qualquer outro
-      // erro é real e precisa aparecer na UI.
-      if (getErrorName(err) === "NotAllowedError") return;
-      console.error("Erro ao compartilhar tela:", err);
-      setScreenShareError(`Não foi possível compartilhar a tela: ${getErrorMessage(err)}`);
+      console.error("Erro ao compartilhar tela:", error);
+      setScreenShareError(`Não foi possível compartilhar a tela: ${message}`);
     }
-  }, [localParticipant, isScreenSharing, settings]);
+  }, [localParticipant, isScreenSharing]);
 
   const resumeAudioPlayback = useCallback(async () => {
     try {
       await room.startAudio();
       setAudioBlocked(false);
-    } catch (err) {
-      console.error("Não foi possível retomar o áudio:", err);
+    } catch (error) {
+      console.error("Não foi possível retomar o áudio:", error);
     }
   }, [room]);
 
+  /**
+   * Aplica um patch na régua, ou não aplica nada.
+   *
+   * Cada grupo volta atrás sozinho se o navegador recusar. A faixa de tela é
+   * mais limitada que a do lobby, e um ajuste de microfone que não pegou não
+   * pode deixar a folha mentindo sobre o que está valendo.
+   */
   const applyMediaSettings = useCallback(
     async (patch: Partial<MediaSettings>) => {
       const previous = settingsRef.current;
-      const next: MediaSettings = { ...previous, ...patch };
-      settingsRef.current = next;
-      setSettings(next);
-
-      // Reverte a UI para o valor anterior. Sem isto, uma falha deixava o
-      // `<select>`/checkbox mostrando uma escolha que nao esta em vigor — e,
-      // como a guarda e `next.X !== previous.X`, re-escolher o mesmo valor nao
-      // disparava nada: o usuario ficava preso ate sair da chamada.
+      const next = { ...previous, ...patch };
       const rollback = () => {
         settingsRef.current = previous;
         setSettings(previous);
       };
 
-      const processors = {
-        echoCancellation: next.echoCancellation,
-        noiseSuppression: next.noiseSuppression,
-        autoGainControl: next.autoGainControl,
-      };
-      const processorsChanged =
-        previous.echoCancellation !== next.echoCancellation ||
-        previous.noiseSuppression !== next.noiseSuppression ||
-        previous.autoGainControl !== next.autoGainControl;
+      const touchesProcessors =
+        patch.echoCancellation !== undefined ||
+        patch.noiseSuppression !== undefined ||
+        patch.autoGainControl !== undefined;
 
-      // `applyConstraints` e NAO `restartTrack`. `restartTrack()` passa por
-      // `constraintsForOptions({audio: options})`, que injeta
-      // `deviceId: {ideal: 'default'}` sempre que o objeto nao traz deviceId
-      // (livekit-client.esm.mjs:13494-13500) e depois grava o resultado em
-      // `this._constraints` (:22601) — a selecao de microfone seria perdida de
-      // forma permanente e todo mute/unmute voltaria ao microfone integrado.
-      // `applyConstraints` faz merge em `_constraints` preservando o deviceId
-      // (:23013-23014) e a assinatura casa 1:1 com `processors`.
-      if (processorsChanged) {
-        const micTrack = localParticipant.getTrackPublication(Track.Source.Microphone)
-          ?.track;
-        if (micTrack instanceof LocalAudioTrack) {
+      // `applyConstraints` e NÃO `restartTrack`: o restart reconstrói as
+      // constraints a partir das opções do room e perde o `deviceId` escolhido.
+      if (touchesProcessors) {
+        const track = localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+        if (track instanceof LocalAudioTrack) {
           try {
-            await micTrack.applyConstraints(processors);
-          } catch (err) {
-            console.error("Erro ao aplicar aprimoramentos de microfone:", err);
+            await track.applyConstraints({
+              echoCancellation: next.echoCancellation,
+              noiseSuppression: next.noiseSuppression,
+              autoGainControl: next.autoGainControl,
+            });
+          } catch (error) {
+            console.error("Erro ao aplicar aprimoramentos de microfone:", error);
             rollback();
+            return;
           }
         }
       }
 
-      // `setMicrophoneEnabled(enabled, { deviceId })` NAO troca o dispositivo:
-      // com a track ja publicada o SDK faz apenas `track.unmute()` e ignora
-      // `options` (livekit-client.esm.mjs:31631-31634). `switchActiveDevice` e
-      // que percorre as publicacoes e chama `LocalAudioTrack.setDeviceId()`.
-      if (next.audioInputId && next.audioInputId !== previous.audioInputId) {
+      // `switchActiveDevice` e não `setMicrophoneEnabled(true, { deviceId })`:
+      // com a track já publicada, aquele overload só faz `unmute()` e ignora as
+      // opções. `"default"` é o que o item vazio do `select` significa.
+      if (patch.audioInputId !== undefined) {
         try {
-          const switched = await room.switchActiveDevice("audioinput", next.audioInputId);
-          if (!switched) {
-            throw new Error("O navegador recusou o microfone selecionado.");
+          const switched = await room.switchActiveDevice(
+            "audioinput",
+            patch.audioInputId ?? "default",
+          );
+          if (!switched) throw new Error("O navegador recusou o microfone selecionado.");
+        } catch (error) {
+          console.error("Erro ao trocar o microfone:", error);
+          rollback();
+          return;
+        }
+      }
+      if (patch.videoInputId !== undefined) {
+        try {
+          const switched = await room.switchActiveDevice(
+            "videoinput",
+            patch.videoInputId ?? "default",
+          );
+          if (!switched) throw new Error("O navegador recusou a câmera selecionada.");
+        } catch (error) {
+          console.error("Erro ao trocar a câmera:", error);
+          rollback();
+          return;
+        }
+      }
+      if (patch.audioOutputId !== undefined) {
+        const sinkSupported =
+          supportsAudioOutputSelection() ||
+          (typeof window !== "undefined" &&
+            typeof window.AudioContext !== "undefined" &&
+            "setSinkId" in window.AudioContext.prototype);
+        if (sinkSupported) {
+          try {
+            await room.switchActiveDevice("audiooutput", patch.audioOutputId ?? "default");
+          } catch (error) {
+            console.error("Erro ao trocar a saída de áudio:", error);
+            rollback();
+            return;
           }
-        } catch (err) {
-          console.error("Erro ao trocar o microfone:", err);
-          rollback();
         }
       }
 
-      if (next.videoInputId && next.videoInputId !== previous.videoInputId) {
-        try {
-          const switched = await room.switchActiveDevice("videoinput", next.videoInputId);
-          if (!switched) {
-            throw new Error("O navegador recusou a câmera selecionada.");
-          }
-        } catch (err) {
-          console.error("Erro ao trocar a câmera:", err);
-          rollback();
-        }
-      }
-
-      // Com `webAudioMix: true` o SDK exige `setSinkId` no AudioContext, que e
-      // uma capacidade separada de `HTMLMediaElement.setSinkId` — o helper
-      // `supportsAudioOutputSelection()` so mede a segunda.
-      const audioContextSupportsSink =
-        typeof window !== "undefined" &&
-        typeof window.AudioContext !== "undefined" &&
-        "setSinkId" in window.AudioContext.prototype;
-
-      if (
-        next.audioOutputId &&
-        next.audioOutputId !== previous.audioOutputId &&
-        (supportsAudioOutputSelection() || audioContextSupportsSink)
-      ) {
-        try {
-          await room.switchActiveDevice("audiooutput", next.audioOutputId);
-        } catch (err) {
-          console.error("Erro ao trocar a saída de áudio:", err);
-          rollback();
-        }
-      }
+      settingsRef.current = next;
+      setSettings(next);
     },
-    [localParticipant, room]
+    [localParticipant, room],
   );
 
-  const handleLeave = () => {
-    onLeave?.();
-    room.disconnect();
-    router.push("/");
-  };
+  const handleLeave = useCallback(() => {
+    void room.disconnect();
+    onLeave();
+  }, [room, onLeave]);
 
-  const toggleTileFullscreen = (element: HTMLElement | null) => {
+  const toggleTileFullscreen = useCallback((element: HTMLElement | null) => {
     if (!element) return;
     if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      element.requestFullscreen().catch(() => {});
+      void document.exitFullscreen();
+      return;
     }
-  };
+    void element.requestFullscreen();
+  }, []);
 
-  const hasActiveScreenShare = screenShareTracks.length > 0;
+  const reconnecting =
+    connectionState === ConnectionState.Reconnecting ||
+    connectionState === ConnectionState.SignalReconnecting;
+
+  const statsTrack = screenShareRefs[0] ?? cameraRefs[0];
 
   return (
-    <div className="relative flex h-full w-full overflow-hidden">
-      {mediaError && (
-        <div
-          role="status"
-          className="absolute bottom-28 left-1/2 z-50 flex max-w-md items-center gap-3 rounded-xl bg-amber-500/15 px-4 py-2 text-xs font-semibold text-amber-200 ring-1 ring-amber-500/40 backdrop-blur-md"
-        >
-          <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <span className="break-words">{mediaError}</span>
-          <button
-            type="button"
-            onClick={onDismissMediaError}
-            className="shrink-0 rounded-lg p-0.5 text-amber-200 transition-colors hover:bg-amber-500/20"
-            aria-label="Dispensar aviso de mídia"
-          >
-            <X className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-        </div>
-      )}
-
-      {connectionState === ConnectionState.Reconnecting && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-xl bg-amber-500 text-black px-4 py-2 text-xs font-bold shadow-2xl animate-pulse">
-          <div className="h-3 w-3 animate-spin rounded-full border-2 border-black border-t-transparent" />
-          <span>Reconectando à reunião...</span>
-        </div>
-      )}
-
-      {connectionState === ConnectionState.SignalReconnecting && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-xl bg-amber-500 text-black px-4 py-2 text-xs font-bold shadow-2xl animate-pulse">
-          <div className="h-3 w-3 animate-spin rounded-full border-2 border-black border-t-transparent" />
-          <span>Reconectando a sinalização...</span>
-        </div>
-      )}
-
-      {unstableConnection && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-xl bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/40 px-4 py-2 text-xs font-semibold shadow-2xl backdrop-blur-md">
-          <AlertCircle className="h-3.5 w-3.5" />
-          <span>Conexão instável — a qualidade da sua rede caiu.</span>
-        </div>
-      )}
-
-      {audioBlocked && (
-        <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-2xl">
-          <span>O navegador bloqueou a reprodução de áudio.</span>
-          <button
-            type="button"
-            onClick={resumeAudioPlayback}
-            className="rounded-lg bg-white/20 px-2.5 py-1 font-bold hover:bg-white/30 transition-colors"
-          >
-            Retomar áudio
-          </button>
-        </div>
-      )}
-
-      {screenShareError && (
-        <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-50 flex max-w-md items-center gap-3 rounded-xl bg-red-500/15 text-red-300 ring-1 ring-red-500/40 px-4 py-2 text-xs font-semibold shadow-2xl backdrop-blur-md">
-          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-          <span className="break-words">{screenShareError}</span>
-          <button
-            type="button"
-            onClick={() => setScreenShareError(null)}
-            className="shrink-0 rounded-lg p-0.5 text-red-300 hover:bg-red-500/20 transition-colors"
-            title="Dispensar"
-            aria-label="Dispensar aviso"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* Main Video Arena */}
-      <div className="relative flex flex-1 flex-col p-4 pb-24 overflow-hidden">
-        {hasActiveScreenShare && isFocusLayout ? (
-          // Presentation Layout: Large Screen Share + Webcam strip / PiP
-          <div className="relative flex flex-1 flex-col lg:flex-row gap-4 h-full w-full overflow-hidden">
-            {/* Primary Screen Share Display */}
-            <div
-              data-fullscreen-tile="true"
-              className="group relative flex-1 rounded-2xl overflow-hidden bg-[#0c0e15] border border-border/80 shadow-2xl flex items-center justify-center [&:fullscreen]:bg-black [&:fullscreen]:rounded-none [&:fullscreen]:border-0"
-            >
-              {isTrackReference(screenShareTracks[0]) && screenShareTracks[0].publication?.track && (
-                <VideoTrack
-                  trackRef={screenShareTracks[0]}
-                  className="h-full w-full object-contain"
-                />
-              )}
-              {/* Controls Overlay: Stats + Fullscreen for Screen Share */}
-              <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
-                <TrackStatsDropdown trackRef={screenShareTracks[0]} size="md" />
+    <div className="flex min-h-0 flex-1 flex-col bg-paper">
+      {/* Avisos: régua, não toast. */}
+      {(screenShareError || mediaError || unstableConnection || audioBlocked) && (
+        <div className="border-b border-rule bg-band">
+          {screenShareError ? (
+            <WarnRow text={screenShareError} onDismiss={() => setScreenShareError(null)} />
+          ) : null}
+          {mediaError ? (
+            <WarnRow
+              text={mediaError}
+              label="Dispensar aviso de mídia"
+              onDismiss={onDismissMediaError}
+            />
+          ) : null}
+          {unstableConnection ? (
+            <WarnRow
+              text="Conexão instável — a qualidade da sua rede caiu."
+              onDismiss={() => setUnstableConnection(false)}
+            />
+          ) : null}
+          {audioBlocked ? (
+            <WarnRow
+              text="O navegador bloqueou a reprodução de áudio."
+              action={
                 <button
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleTileFullscreen(e.currentTarget.closest('[data-fullscreen-tile]') as HTMLElement);
-                  }}
-                  className="flex h-8 w-8 items-center justify-center rounded-xl bg-black/60 hover:bg-black/90 backdrop-blur-md border border-white/10 text-white shadow-lg transition-all hover:scale-105"
-                  title="Tela cheia do compartilhamento"
+                  onClick={resumeAudioPlayback}
+                  className="border border-rule-2 bg-sheet px-2.5 py-1 text-[0.75rem] font-semibold text-ink transition-colors hover:border-rule-3 [border-radius:var(--radius-cell)]"
                 >
-                  <Maximize2 className="h-4 w-4" />
+                  Retomar áudio
                 </button>
-              </div>
+              }
+              onDismiss={() => setAudioBlocked(false)}
+            />
+          ) : null}
+        </div>
+      )}
+
+      {reconnecting ? (
+        <div className="border-b border-rule bg-signal-wash px-4 py-2 sm:px-6">
+          <p className="font-mono text-[0.75rem] text-signal">
+            {connectionState === ConnectionState.SignalReconnecting
+              ? "Reconectando a sinalização..."
+              : "Reconectando à reunião..."}
+          </p>
+        </div>
+      ) : null}
+
+      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 sm:p-6">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
+          {/* O monitor. Escuro de propósito: é contra um fundo neutro que se
+              avalia o que está sendo mostrado. */}
+          <div className="flex min-h-[45vh] min-w-0 flex-1 flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <Stamp state={hasActiveScreenShare ? "ativo" : "pendente"}>
+                {hasActiveScreenShare ? "Compartilhando tela" : "Tela"}
+              </Stamp>
+              {screenShareRefs[0] ? (
+                <button
+                  type="button"
+                  title="Tela cheia do compartilhamento"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleTileFullscreen(event.currentTarget.closest("[data-fullscreen-tile]"));
+                  }}
+                  className="border border-rule-2 bg-sheet px-2 py-1 text-ink transition-colors hover:bg-band [border-radius:var(--radius-cell)]"
+                >
+                  <Maximize2 size={14} strokeWidth={1.5} aria-hidden />
+                  <span className="sr-only">Tela cheia do compartilhamento</span>
+                </button>
+              ) : null}
             </div>
 
-            {/* Side / Bottom Webcam Column */}
-            <div className="flex lg:flex-col gap-3 overflow-x-auto lg:overflow-y-auto lg:w-72 shrink-0">
-              {cameraTracks.map((trackRef) => {
-                const p = trackRef.participant;
-                // Uma track pode chegar sem participante durante reconexão rápida.
-                if (!p) return null;
-                const hasCam = isTrackReference(trackRef) && trackRef.publication?.track && !trackRef.publication.isMuted;
-                const isSpeaking = p.isSpeaking;
-
-                return (
-                  <div
-                    key={`${p.identity}-cam`}
-                    data-fullscreen-tile="true"
-                    className={`group relative aspect-video rounded-xl overflow-hidden bg-[#11131c] border transition-all shrink-0 w-48 lg:w-full [&:fullscreen]:bg-black [&:fullscreen]:rounded-none [&:fullscreen]:border-0 ${
-                      isSpeaking
-                        ? "border-emerald-500 ring-2 ring-emerald-500/30"
-                        : "border-border/70"
-                    }`}
-                  >
-                    {hasCam && isTrackReference(trackRef) ? (
-                      <VideoTrack
-                        trackRef={trackRef}
-                        className="h-full w-full object-cover -scale-x-100 [&:fullscreen]:object-contain"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center bg-[#131622] text-gray-400">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-gray-300 font-bold text-base">
-                          {(p.name || p.identity).charAt(0).toUpperCase()}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Controls Overlay: Stats + Fullscreen for Webcam */}
-                    <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-                      {hasCam && <TrackStatsDropdown trackRef={trackRef} size="sm" />}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleTileFullscreen(e.currentTarget.closest('[data-fullscreen-tile]') as HTMLElement);
-                        }}
-                        className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/60 hover:bg-black/90 backdrop-blur-md border border-white/10 text-white shadow-md hover:scale-105 transition-all"
-                        title={`Tela cheia de ${p.name || p.identity}`}
-                      >
-                        <Maximize2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-
-                    {/* Participant Badge */}
-                    <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/70 backdrop-blur-md px-2 py-1 text-[11px] text-white font-medium border border-white/10">
-                      <span>{p.name || p.identity}</span>
-                      {p.isLocal && <span className="text-[9px] text-indigo-400">(Você)</span>}
-                      {p.isMicrophoneEnabled ? (
-                        <Mic className="h-3 w-3 text-emerald-400 ml-1" />
-                      ) : (
-                        <MicOff className="h-3 w-3 text-red-400 ml-1" />
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+            <div
+              data-fullscreen-tile="true"
+              className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden border border-rule-2 bg-monitor"
+            >
+              {screenShareRefs.length > 0 ? (
+                screenShareRefs.map((trackRef) => (
+                  <VideoTrack
+                    key={`${trackRef.participant.identity}-${trackRef.source}`}
+                    trackRef={trackRef}
+                    className="h-full w-full object-contain"
+                  />
+                ))
+              ) : (
+                <p className="px-6 text-center text-[0.875rem] leading-[1.6] text-monitor-ink">
+                  {cameraRefs.length > 0
+                    ? "Ninguém está compartilhando a tela."
+                    : "Compartilhe sua tela para começar."}
+                </p>
+              )}
             </div>
           </div>
-        ) : (
-          // Grid Layout: Adaptive Grid of Participants
-          <div
-            className={`grid flex-1 gap-4 h-full w-full overflow-y-auto p-1 ${
-              tracks.length <= 1
-                ? "grid-cols-1"
-                : tracks.length === 2
-                ? "grid-cols-1 md:grid-cols-2"
-                : tracks.length <= 4
-                ? "grid-cols-2"
-                : "grid-cols-2 lg:grid-cols-3"
-            }`}
-          >
-            {tracks.map((trackRef) => {
-              const p = trackRef.participant;
-              // Uma track pode chegar sem participante durante reconexão rápida.
-              if (!p) return null;
-              const isScreen = trackRef.source === Track.Source.ScreenShare;
-              const hasVideo = isTrackReference(trackRef) && trackRef.publication?.track && !trackRef.publication.isMuted;
-              const isSpeaking = p.isSpeaking;
 
+          {/* A coluna de comando: um botão marcado por função, com o estado
+              escrito embaixo. O estado nunca é só cor. */}
+          <div className="flex shrink-0 flex-col gap-3 lg:w-[17.5rem]">
+            <MediaControls
+              isMicOn={isMicOn}
+              isCamOn={isCamOn}
+              isScreenSharing={isScreenSharing}
+              onToggleMic={toggleMic}
+              onToggleCam={toggleCam}
+              onToggleScreenShare={toggleScreenShare}
+              onLeave={handleLeave}
+            />
+
+            <div className="grid grid-cols-3 gap-px border border-rule bg-rule lg:grid-cols-1 [border-radius:var(--radius-sheet)]">
+              <PanelToggle
+                open={isStatsOpen}
+                onClick={() => setIsStatsOpen((v) => !v)}
+                icon={<ActivityGlyph />}
+                label="Estatísticas"
+              />
+              <PanelToggle
+                open={isParticipantsOpen}
+                onClick={() => setIsParticipantsOpen((v) => !v)}
+                icon={<Users size={14} strokeWidth={1.5} aria-hidden />}
+                label="Pessoas"
+              />
+              <PanelToggle
+                open={isChatOpen}
+                onClick={() => setIsChatOpen((v) => !v)}
+                icon={<MessageSquare size={14} strokeWidth={1.5} aria-hidden />}
+                label="Chat"
+              />
+            </div>
+
+            {isStatsOpen ? (
+              <TrackStatsDropdown
+                trackRef={statsTrack}
+                open={isStatsOpen}
+                onClose={() => setIsStatsOpen(false)}
+              />
+            ) : null}
+          </div>
+        </div>
+
+        {/* As câmeras: fiadas pequenas abaixo do monitor, como contact sheets. */}
+        {cameraRefs.length > 0 ? (
+          <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {cameraRefs.map((trackRef) => {
+              const p = trackRef.participant;
               return (
                 <div
-                  key={`${p.identity}-${trackRef.source}`}
+                  key={`${p.identity}-cam`}
                   data-fullscreen-tile="true"
-                  className={`group relative rounded-2xl overflow-hidden bg-[#11131c] border flex items-center justify-center transition-all [&:fullscreen]:bg-black [&:fullscreen]:rounded-none [&:fullscreen]:border-0 ${
-                    isSpeaking
-                      ? "border-emerald-500 shadow-lg shadow-emerald-500/10 ring-2 ring-emerald-500/30"
-                      : "border-border/80"
-                  }`}
+                  className="overflow-hidden border border-rule-2"
                 >
-                  {hasVideo && isTrackReference(trackRef) ? (
-                    <VideoTrack
-                      trackRef={trackRef}
-                      className={`h-full w-full ${isScreen ? "object-contain" : "object-cover -scale-x-100 [&:fullscreen]:object-contain"}`}
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center justify-center text-gray-400">
-                      <div className="flex h-20 w-20 items-center justify-center rounded-full bg-secondary/80 text-gray-300 font-bold text-2xl border border-border/80 mb-2">
-                        {(p.name || p.identity).charAt(0).toUpperCase()}
-                      </div>
-                      <span className="text-sm font-medium text-gray-300">
-                        {p.name || p.identity}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Controls Overlay: Stats + Fullscreen for Tile */}
-                  <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-                    {hasVideo && <TrackStatsDropdown trackRef={trackRef} size="md" />}
+                  <div className="aspect-video bg-monitor">
+                    <VideoTrack trackRef={trackRef} className="h-full w-full object-cover" />
+                  </div>
+                  <div className="flex items-center justify-between gap-2 border-t border-rule bg-sheet px-2.5 py-1.5">
+                    <span className="truncate text-[0.75rem] text-ink-2">
+                      {p.name || p.identity}
+                      {p.isLocal ? " (Você)" : ""}
+                    </span>
                     <button
                       type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleTileFullscreen(e.currentTarget.closest('[data-fullscreen-tile]') as HTMLElement);
+                      title={`Tela cheia de ${p.name || p.identity}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleTileFullscreen(event.currentTarget.closest("[data-fullscreen-tile]"));
                       }}
-                      className="flex h-8 w-8 items-center justify-center rounded-xl bg-black/60 hover:bg-black/90 backdrop-blur-md border border-white/10 text-white shadow-md hover:scale-105 transition-all"
-                      title={`Tela cheia de ${isScreen ? "compartilhamento" : (p.name || p.identity)}`}
+                      className="shrink-0 text-ink-3 transition-colors hover:text-ink"
                     >
-                      <Maximize2 className="h-4 w-4" />
+                      <Maximize2 size={13} strokeWidth={1.5} aria-hidden />
+                      <span className="sr-only">{`Tela de ${p.name || p.identity}`}</span>
                     </button>
-                  </div>
-
-                  {/* Badge */}
-                  <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-xl bg-black/70 backdrop-blur-md px-3 py-1.5 text-xs text-white font-medium border border-white/10">
-                    {isScreen && <Monitor className="h-3.5 w-3.5 text-emerald-400" />}
-                    <span>{isScreen ? `Tela de ${p.name || p.identity}` : p.name || p.identity}</span>
-                    {p.isLocal && <span className="text-[10px] text-indigo-400 font-bold">(Você)</span>}
-                    {p.isMicrophoneEnabled ? (
-                      <Mic className="h-3.5 w-3.5 text-emerald-400" />
-                    ) : (
-                      <MicOff className="h-3.5 w-3.5 text-red-400" />
-                    )}
                   </div>
                 </div>
               );
             })}
           </div>
-        )}
-        {/* Barra ancorada na arena: `absolute inset-x-0` dentro do container relativo
-           em vez de `fixed` na viewport. Era ela que cobria o compositor do chat
-           e o rodape da lista de participantes. */}
-        <MediaControls
-          isMicOn={isMicOn}
-          isCamOn={isCamOn}
-          isScreenSharing={isScreenSharing}
-          isChatOpen={isChatOpen}
-          isParticipantsOpen={isParticipantsOpen}
-          isFocusLayout={isFocusLayout}
-          participantCount={participants.length + 1}
-          onToggleMic={toggleMic}
-          onToggleCam={toggleCam}
-          onToggleScreenShare={toggleScreenShare}
-          onToggleChat={() => {
-            setIsChatOpen(!isChatOpen);
-            if (isParticipantsOpen) setIsParticipantsOpen(false);
-          }}
-          onToggleParticipants={() => {
-            setIsParticipantsOpen(!isParticipantsOpen);
-            if (isChatOpen) setIsChatOpen(false);
-          }}
-          onToggleLayout={() => setIsFocusLayout(!isFocusLayout)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          onLeave={handleLeave}
-
-        />
-
+        ) : null}
       </div>
 
-      {/* Sidebars */}
-      <ChatSidebar
-        isOpen={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
-      />
+      {/* A régua de saída: uma linha de células, largura toda, na margem. */}
+      <div className="border-t border-rule bg-sheet">
+        <div className="mx-auto flex max-w-[80rem] items-center justify-between gap-4 px-4 py-2.5 sm:px-6">
+          <button
+            type="button"
+            onClick={() => router.push("/")}
+            className="flex items-center gap-1.5 text-[0.8125rem] text-ink-2 transition-colors hover:text-ink"
+          >
+            <ChevronLeft size={14} strokeWidth={1.5} aria-hidden />
+            Início
+          </button>
+          <button
+            type="button"
+            onClick={handleLeave}
+            className="flex items-center gap-2 border border-rule-2 px-3 py-1.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:border-alert-line hover:bg-alert-wash hover:text-alert [border-radius:var(--radius-sheet)]"
+          >
+            <LogOut size={14} strokeWidth={1.5} aria-hidden />
+            Sair
+          </button>
+        </div>
+      </div>
 
-      <ParticipantsList
-        isOpen={isParticipantsOpen}
-        onClose={() => setIsParticipantsOpen(false)}
-      />
-
-
-      {/* Advanced Settings Modal */}
       <SettingsModal
-        isOpen={isSettingsOpen}
-        isScreenSharing={isScreenSharing}
+        open={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
-        onUpdateSettings={(newSettings) => {
-          void applyMediaSettings(newSettings);
-        }}
+        onApply={applyMediaSettings}
         devices={devices}
+        isScreenSharing={isScreenSharing}
       />
+      <ParticipantsList isOpen={isParticipantsOpen} onClose={() => setIsParticipantsOpen(false)} />
+      <ChatSidebar isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
     </div>
+  );
+}
+
+function WarnRow({
+  text,
+  action,
+  onDismiss,
+  label = "Dispensar",
+}: {
+  text: string;
+  action?: React.ReactNode;
+  onDismiss: () => void;
+  label?: string;
+}) {
+  return (
+    <div
+      role="status"
+      className="flex items-center gap-3 border-b border-rule px-4 py-2 last:border-b-0 sm:px-6"
+    >
+      <p className="min-w-0 flex-1 text-[0.8125rem] text-ink-2">{text}</p>
+      {action}
+      <button
+        type="button"
+        aria-label={label}
+        onClick={onDismiss}
+        className="shrink-0 border border-transparent px-1.5 py-0.5 text-[0.75rem] text-ink-3 transition-colors hover:text-ink"
+      >
+        Dispensar
+      </button>
+    </div>
+  );
+}
+
+function PanelToggle({
+  open,
+  onClick,
+  icon,
+  label,
+}: {
+  open: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={open}
+      className={`flex items-center justify-center gap-1.5 px-2 py-2 text-[0.6875rem] transition-colors ${
+        open ? "bg-signal-wash text-signal" : "bg-sheet text-ink-2 hover:bg-band hover:text-ink"
+      }`}
+    >
+      {icon}
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+/** Glifo desenhado na mesma espessura das teclas de biblioteca. */
+function ActivityGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="size-[14px] shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="square"
+      aria-hidden
+    >
+      <path d="M1 11h2.5l2-6 2.5 9 2.5-12 2 9H15" />
+    </svg>
   );
 }

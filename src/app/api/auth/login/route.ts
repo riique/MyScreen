@@ -1,17 +1,15 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { comparePassword, signToken, sessionCookieOptions, SESSION_COOKIE } from "@/lib/auth";
+import {
+  BCRYPT_MAX_BYTES,
+  comparePassword,
+  exceedsBcryptLimit,
+  signToken,
+  sessionCookieOptions,
+  SESSION_COOKIE,
+} from "@/lib/auth";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { EMAIL_PATTERN, str, withErrorHandling } from "@/lib/validate";
-
-/**
- * Limite do bcrypt: 72 BYTES. Acima disso o hash trunca em silencio
- * (`bcryptjs` documenta isso em `truncates()`), o que significa que
- * "A"*72 e "A"*72 + qualquer sufixo comparam como iguais. Sem este guard, quem
- * conhece os 72 primeiros bytes da senha da vítima autentica com qualquer
- * resto — o servidor responde 200 e emite cookie de sessão válido.
- */
-const BCRYPT_MAX_BYTES = 72;
 
 async function handleLogin(req: Request): Promise<NextResponse> {
   // Antes do rate limit, esta rota aceitava tentativas ilimitadas de senha
@@ -21,7 +19,17 @@ async function handleLogin(req: Request): Promise<NextResponse> {
 
   const body: Record<string, unknown> = await req.json().catch(() => ({}));
   const email = str(body, "email", { max: 254, pattern: EMAIL_PATTERN }).toLowerCase();
+  // `str` limita em CARACTERES; o bcrypt trunca em BYTES. Os dois guards sao
+  // necessarios: sem o de bytes, uma senha multibyte de exatamente 72 bytes
+  // (36 acentos) passa em `str` e o truncamento silencioso do bcrypt volta a
+  // ser exploravel no login. Rejeitar devolve a mesma 401 generica do resto.
   const password = str(body, "password", { max: BCRYPT_MAX_BYTES });
+  if (exceedsBcryptLimit(password)) {
+    return NextResponse.json(
+      { error: "Email ou senha incorretos." },
+      { status: 401 }
+    );
+  }
 
   const user = await prisma.user.findUnique({ where: { email } });
 

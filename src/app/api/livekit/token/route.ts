@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { comparePassword, getSessionUser } from "@/lib/auth";
+import { comparePassword, exceedsBcryptLimit, getSessionUser } from "@/lib/auth";
 import { createLiveKitToken } from "@/lib/livekit";
 import { env } from "@/lib/env";
 import { enforceRateLimit } from "@/lib/rate-limit";
@@ -34,6 +34,16 @@ async function handleToken(req: Request): Promise<NextResponse> {
     if (!password) {
       return NextResponse.json(
         { error: "Esta sala requer uma senha para entrar." },
+        { status: 401 }
+      );
+    }
+    // Guarda de BYTES antes do bcrypt. Esta era a UNICA rota que rodava
+    // `comparePassword` sem teto: um corpo com senha de vários MB consumia o
+    // custo 12 inteiro, e um `str(... {max: 72})` em caracteres nao serviria
+    // aqui — a senha de sala nao passa por `str` porque e opcional.
+    if (exceedsBcryptLimit(password)) {
+      return NextResponse.json(
+        { error: "Senha incorreta." },
         { status: 401 }
       );
     }

@@ -1,0 +1,424 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-29T00:00:00.000Z",
+  "title": "Design System: MyScreen",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Desk",
+        "canonical": "#f2f2ef",
+        "tonalRamp": ["#0b0b09", "#252523", "#424240", "#61615f", "#828280", "#a5a5a2", "#c9c9c6", "#efefec"],
+        "contrast": { "onSheet": 1.12, "inkOnIt": 15.98 }
+      },
+      "sheet": {
+        "role": "neutral",
+        "displayName": "Sheet",
+        "canonical": "#ffffff",
+        "tonalRamp": ["#0b0b0b", "#252525", "#424242", "#616161", "#828282", "#a5a5a5", "#c9c9c9", "#eeeeee"],
+        "contrast": { "inkOnIt": 17.92 }
+      },
+      "band": {
+        "role": "neutral",
+        "displayName": "Band",
+        "canonical": "#f7f7f4",
+        "tonalRamp": ["#0a0a08", "#232322", "#40403f", "#5f5f5e", "#80807f", "#a3a3a1", "#c7c7c5", "#efefec"],
+        "contrast": { "ink3OnIt": 4.98, "ink2OnIt": 7.76 }
+      },
+      "band-2": {
+        "role": "neutral",
+        "displayName": "Band 2 — pressed",
+        "canonical": "#ededea",
+        "tonalRamp": ["#090908", "#202020", "#3b3b3a", "#585857", "#797978", "#9c9c9a", "#c0c0be", "#e9e9e6"],
+        "contrast": { "ink3OnIt": 4.55, "ink2OnIt": 7.1 }
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#16171a",
+        "tonalRamp": ["#0a0b0e", "#242528", "#414245", "#606165", "#818286", "#a3a5a9", "#c7c9cd", "#edeef3"],
+        "contrast": { "onSheet": 17.92, "onPaper": 15.98, "onBand2": 15.28 }
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Ink 2",
+        "canonical": "#4b4e55",
+        "tonalRamp": ["#090a0c", "#212328", "#3c3f45", "#5a5d64", "#7a7d85", "#9ea1a9", "#c3c5cb", "#e8e9ee"],
+        "contrast": { "onSheet": 8.33, "onPaper": 7.43, "onBand": 7.76 }
+      },
+      "ink-3": {
+        "role": "neutral",
+        "displayName": "Ink 3 — graphite",
+        "canonical": "#676b74",
+        "tonalRamp": ["#0d0e10", "#25272a", "#3f4145", "#5b5d62", "#797b80", "#9a9ca1", "#bdc0c4", "#e2e3e6"],
+        "contrast": { "onSheet": 5.34, "onPaper": 4.76, "onBand": 4.98, "onBand2": 4.55 },
+        "note": "Lightest step still legal for copy on sheet AND paper."
+      },
+      "ink-4": {
+        "role": "neutral",
+        "displayName": "Ink 4 — rules only",
+        "canonical": "#9a9ea6",
+        "tonalRamp": ["#101114", "#2a2c30", "#45474c", "#62646a", "#818489", "#a3a6ab", "#c6c8cd", "#ebecf0"],
+        "contrast": { "onSheet": 2.69, "onPaper": 2.4 },
+        "note": "FORBIDDEN for copy. Disabled borders, rules and the strike on an amended value only."
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Rule — inside line",
+        "canonical": "#d5d5ce",
+        "tonalRamp": ["#0a0a07", "#222220", "#3b3b38", "#585855", "#777773", "#999994", "#bdbdb9", "#e3e3de"],
+        "contrast": { "onSheet": 1.47 }
+      },
+      "rule-2": {
+        "role": "neutral",
+        "displayName": "Rule 2 — block border",
+        "canonical": "#b9b9b0",
+        "tonalRamp": ["#090907", "#20201d", "#393936", "#545450", "#72726c", "#93938c", "#b7b7b1", "#deded8"],
+        "contrast": { "onSheet": 1.98, "onPaper": 1.76 }
+      },
+      "rule-3": {
+        "role": "neutral",
+        "displayName": "Rule 3 — outer frame",
+        "canonical": "#8a8a80",
+        "tonalRamp": ["#080806", "#1d1d19", "#33332f", "#4c4c46", "#686862", "#888882", "#adada6", "#d6d6d0"],
+        "contrast": { "onSheet": 3.48, "onPaper": 3.11 }
+      },
+      "signal": {
+        "role": "primary",
+        "displayName": "Leader Blue",
+        "canonical": "#1b3a7d",
+        "tonalRamp": ["#00003c", "#031d5e", "#1e3d81", "#3c5ea5", "#5c80ca", "#7da4f0", "#a0c9ff", "#c4eeff"],
+        "contrast": { "onSheet": 10.78, "onPaper": 9.61, "onSignalWash": 9.53, "onSignalWash2": 8.85, "onSignal": 10.78 }
+      },
+      "signal-2": {
+        "role": "primary",
+        "displayName": "Leader Blue — pressed",
+        "canonical": "#142c5c",
+        "tonalRamp": ["#00002e", "#021748", "#173069", "#335189", "#5374ad", "#7597d3", "#9abdff", "#c1e2ff"],
+        "contrast": { "onSheet": 13.6 }
+      },
+      "signal-wash": {
+        "role": "primary",
+        "displayName": "Signal Wash",
+        "canonical": "#eef1f7",
+        "tonalRamp": ["#070911", "#1c202c", "#333848", "#4d5464", "#6a7182", "#8d95a5", "#b3bac8", "#dee4ef"],
+        "contrast": { "inkOnIt": 15.84 }
+      },
+      "signal-wash-2": {
+        "role": "primary",
+        "displayName": "Signal Wash 2",
+        "canonical": "#e4e9f3",
+        "tonalRamp": ["#06080f", "#191d29", "#2e3443", "#464e5e", "#616a7b", "#838d9e", "#abb3c2", "#dae0ec"],
+        "contrast": { "signalOnIt": 8.85 }
+      },
+      "signal-line": {
+        "role": "primary",
+        "displayName": "Signal Line",
+        "canonical": "#b9c6e0",
+        "tonalRamp": ["#070a0e", "#1b2028", "#313844", "#4a5362", "#687284", "#8c96a8", "#b6bece", "#dce4f1"],
+        "contrast": { "onSheet": 1.72 }
+      },
+      "on-signal": {
+        "role": "neutral",
+        "displayName": "On Signal",
+        "canonical": "#ffffff",
+        "tonalRamp": ["#0b0b0b", "#252525", "#424242", "#616161", "#828282", "#a5a5a5", "#c9c9c9", "#eeeeee"],
+        "contrast": { "onSignal": 10.78 }
+      },
+      "alert": {
+        "role": "secondary",
+        "displayName": "Attention Red",
+        "canonical": "#8f2a1c",
+        "tonalRamp": ["#320000", "#560000", "#7b1507", "#a13b2c", "#c75e4d", "#ef816e", "#ffa591", "#ffcbb5"],
+        "contrast": { "onSheet": 8.35, "onPaper": 7.44, "onAlertWash": 7.52, "onAlertWash2": 6.9 }
+      },
+      "alert-line": {
+        "role": "secondary",
+        "displayName": "Alert Line",
+        "canonical": "#d9b3ac",
+        "tonalRamp": ["#0d0605", "#26100d", "#431c18", "#633029", "#85473e", "#a96358", "#cd8b80", "#efc0b7"],
+        "contrast": { "onSheet": 1.91 }
+      },
+      "alert-line-2": {
+        "role": "secondary",
+        "displayName": "Alert Line 2",
+        "canonical": "#b9705f",
+        "tonalRamp": ["#0a0504", "#1f0d0a", "#381915", "#542a24", "#733f37", "#945a50", "#b88076", "#dcb4ad"],
+        "contrast": { "onSheet": 3.79 }
+      },
+      "alert-wash": {
+        "role": "secondary",
+        "displayName": "Alert Wash",
+        "canonical": "#fbf1ef",
+        "tonalRamp": ["#0c0706", "#24110e", "#3e1c18", "#5c2c26", "#7e413a", "#a55e56", "#c8867d", "#f0d5d0"],
+        "contrast": { "alertOnIt": 7.52 }
+      },
+      "alert-wash-2": {
+        "role": "secondary",
+        "displayName": "Alert Wash 2",
+        "canonical": "#f7e6e2",
+        "tonalRamp": ["#0b0605", "#200f0c", "#381a16", "#542822", "#743a33", "#9a554c", "#bf7a72", "#ecd0cb"],
+        "contrast": { "alertOnIt": 6.9 }
+      },
+      "warn": {
+        "role": "secondary",
+        "displayName": "Warning Ochre",
+        "canonical": "#8a5a12",
+        "tonalRamp": ["#220000", "#421700", "#633600", "#85560a", "#a97736", "#ce9a5a", "#f4be7d", "#ffe3a2"],
+        "contrast": { "onSheet": 5.91, "onPaper": 5.51, "onBand": 5.51 }
+      },
+      "warn-dot": {
+        "role": "secondary",
+        "displayName": "Warning Dot",
+        "canonical": "#c08a2a",
+        "tonalRamp": ["#100500", "#2b0f00", "#4b1d00", "#6f3100", "#964b0a", "#bb6f24", "#dd9a52", "#f7c68c"],
+        "contrast": { "onSheet": 3.04 }
+      },
+      "monitor": {
+        "role": "tertiary",
+        "displayName": "Monitor",
+        "canonical": "#101114",
+        "tonalRamp": ["#000000", "#141417", "#2a2a2e", "#424247", "#5d5d63", "#7d7d84", "#a2a2a9", "#cacad0"],
+        "contrast": { "monitorInkOnIt": 6.04 },
+        "note": "Video surfaces only. Deliberate exception to the paper ground: a neutral mid-dark surround is how an image is judged."
+      },
+      "monitor-ink": {
+        "role": "tertiary",
+        "displayName": "Monitor Ink",
+        "canonical": "#8e9299",
+        "tonalRamp": ["#070809", "#1c1e21", "#32353a", "#4b4f55", "#686d74", "#898f97", "#aeb4bb", "#d8dce2"],
+        "contrast": { "onMonitor": 6.04 }
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page title. SheetTitle, defaults to h1. 1.75rem → 2.125rem, 600, tracking -0.022em, text-wrap: balance." },
+      "headline": { "displayName": "Headline", "purpose": "Lobby title and error-boundary heading. 1.375rem → 1.5rem, 600, tracking -0.02em." },
+      "title": { "displayName": "Title", "purpose": "SheetHead block titles, table definitions, form legends. Structural — never a kicker or eyebrow." },
+      "body": { "displayName": "Body", "purpose": "Prose and notes. 0.875rem, line-height 1.5–1.65, max measure 70ch, text-wrap: pretty." },
+      "label": { "displayName": "Label", "purpose": "Column header, field label, group legend. Spline Sans Mono 500, 10.5px, tracking 0.13em, uppercase, ink-3 on a hairline." },
+      "value": { "displayName": "Value", "purpose": "Every value, id, timecode, duration and statistic. Spline Sans Mono, tabular figures, right tight to the margin." },
+      "value-emphasis": { "displayName": "Value — emphasized", "purpose": "The one value a cell is asserting (the audio column on the ruler). 1.375rem, 600, signal." }
+    },
+    "shadows": [
+      {
+        "name": "lift",
+        "value": "0 1px 2px rgb(22 23 26 / 0.06), 0 6px 16px -10px rgb(22 23 26 / 0.18)",
+        "purpose": "The sheet, and only the sheet: a sheet lifting off the desk. Real offset and real blur; without them it is a decorative halo."
+      },
+      {
+        "name": "overlay",
+        "value": "0 2px 4px rgb(22 23 26 / 0.07), 0 24px 48px -18px rgb(22 23 26 / 0.28)",
+        "purpose": "The settings modal panel — the one surface that genuinely floats over the call. Nothing else shadows."
+      }
+    ],
+    "motion": [
+      { "name": "ink-settle", "value": "260ms cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "The amendment mark: a new cell value settling in ink, from opacity .35 / translateY(2px). Starts from a visible state — never a fade-in from 0." },
+      { "name": "rule-draw", "value": "420ms cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "A hairline drawing itself from the left margin (transform-origin: left center)." },
+      { "name": "color-standard", "value": "150ms linear (transition-colors)", "purpose": "Every hover, focus and pressed state in the system. Colour only — no scale, no lift." },
+      { "name": "amendment-hold", "value": "4500ms", "purpose": "How long the struck-through previous value stays on the sheet. Part of the layout, not a toast." },
+      { "name": "copy-reset", "value": "2500ms", "purpose": "How long the command rail shows 'Copiado' before returning to idle." },
+      { "name": "vu-throttle", "value": "100ms", "purpose": "The microphone bar moves at display rate; the accessible value and the written state are pushed to React at 10 Hz." },
+      { "name": "reduced-motion", "value": "prefers-reduced-motion: reduce → 0.01ms", "purpose": "Global. Every animation, iteration and transition collapses; scroll-behavior becomes auto." }
+    ],
+    "breakpoints": [
+      { "name": "base", "value": "0px", "note": "Ruler is 2 columns; value row and option row share the same breakpoint so the option cells stay under the cell they change." },
+      { "name": "sm", "value": "640px", "note": "Page title steps up; Band padding px-8 py-8; two-column page sections; settings device grid goes two-up; modal centres instead of sitting on the sheet bottom." },
+      { "name": "md", "value": "768px", "note": "Ruler goes to 4 columns; home 'Entrar' row splits 1fr/15rem; capabilities split at 15rem; hosting block splits at 26rem; media control rail becomes a single column." },
+      { "name": "lg", "value": "1024px", "note": "In-room stage splits monitor + 17.5rem command column; lobby splits preview + 23rem identity column; participants 20rem and chat 22rem sidebars; camera tiles go four-up." }
+    ],
+    "patterns": [
+      {
+        "name": "The amendment mark",
+        "trigger": "A Cell value changes, on every surface that carries a ruler.",
+        "html": "<div class=\"ds-cell\"><span class=\"ds-cell-label\">Taxa</span><div class=\"ds-cell-body\"><span class=\"ds-cell-prev\">30 FPS</span><span class=\"ds-cell-value ds-amended\">60 FPS</span></div></div>",
+        "css": ".ds-cell { padding: 1rem 1.5rem; border-bottom: 1px solid var(--color-rule); } .ds-cell-label { display: block; padding-bottom: 6px; border-bottom: 1px solid var(--color-rule); font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.13em; text-transform: uppercase; color: var(--color-ink-3); } .ds-cell-body { margin-top: 10px; min-height: 1.75rem; } .ds-cell-prev { margin-right: 8px; font-family: var(--font-mono); font-size: 0.8125rem; color: var(--color-ink-3); text-decoration: line-through; text-decoration-color: var(--color-ink-4); } .ds-cell-value { font-family: var(--font-mono); font-size: 1.0625rem; line-height: 1; color: var(--color-ink); font-variant-numeric: tabular-nums; } @keyframes ink-settle { from { opacity: 0.35; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } } .ds-amended { animation: ink-settle 260ms cubic-bezier(0.16, 1, 0.3, 1); }",
+        "a11y": "The struck value is aria-hidden (duplicate text) and a visually-hidden aria-live=\"polite\" region announces \"<label>: <previous> alterado para <value>\"."
+      },
+      {
+        "name": "The ruler row",
+        "trigger": "A capture parameter with 2–3 discrete options.",
+        "html": "<div class=\"ds-ruler\" role=\"radiogroup\" aria-label=\"Resolução\"><label class=\"ds-choice\"><input class=\"ds-sr\" type=\"radio\" name=\"ds-res\" value=\"720p\"><span class=\"ds-choice-label\">720p</span></label><label class=\"ds-choice is-on\"><input class=\"ds-sr\" type=\"radio\" name=\"ds-res\" value=\"1080p\" checked><span class=\"ds-choice-label\">1080p</span></label><label class=\"ds-choice\"><input class=\"ds-sr\" type=\"radio\" name=\"ds-res\" value=\"4k\"><span class=\"ds-choice-label\">4K</span></label></div>",
+        "css": ".ds-ruler { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--color-rule); border-bottom: 1px solid var(--color-rule); background: var(--color-sheet); border-radius: var(--radius-sheet); } .ds-choice { position: relative; display: flex; cursor: pointer; flex-direction: column; justify-content: center; padding: 0.75rem 1rem; border-right: 1px solid var(--color-rule); background: var(--color-sheet); transition: background-color 150ms linear, color 150ms linear; } .ds-choice:last-child { border-right: 0; } .ds-choice:hover, .ds-choice:focus-within { background: var(--color-band); } .ds-choice:focus-within { outline: 2px solid var(--color-signal); outline-offset: -3px; } .ds-choice.is-on { background: var(--color-signal-wash); } .ds-choice-label { font-family: var(--font-mono); font-size: 0.8125rem; font-weight: 500; line-height: 1; color: var(--color-ink-2); font-variant-numeric: tabular-nums; } .ds-choice:hover .ds-choice-label { color: var(--color-ink); } .ds-choice.is-on .ds-choice-label { color: var(--color-signal); } .ds-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }"
+      },
+      {
+        "name": "The state stamp",
+        "trigger": "A column whose value is a state: room access, live share, lobby lock.",
+        "html": "<span class=\"ds-stamp is-active\"><span class=\"ds-stamp-dot\"></span>Compartilhando tela</span>",
+        "css": ".ds-stamp { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px; border: 1px solid var(--color-rule-2); border-radius: 2px; font-family: var(--font-mono); font-size: 10px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-ink-3); } .ds-stamp.is-active { border-color: var(--color-signal); background: var(--color-signal-wash); color: var(--color-signal); } .ds-stamp-dot { width: 5px; height: 5px; border-radius: 9999px; background: var(--color-signal); }"
+      },
+      {
+        "name": "The measured value",
+        "trigger": "An instrument field the WebRTC runtime has not measured.",
+        "html": "<div class=\"ds-row\"><dt class=\"ds-row-label\">Latência (RTT)</dt><dd class=\"ds-row-value is-unknown\">n/d</dd></div>",
+        "css": ".ds-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--color-rule); } .ds-row:last-child { border-bottom: 0; } .ds-row-label { font-size: 0.75rem; color: var(--color-ink-3); } .ds-row-value { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-ink); font-variant-numeric: tabular-nums; } .ds-row-value.is-unknown { color: var(--color-ink-3); }"
+      },
+      {
+        "name": "The monitor",
+        "trigger": "Any video surface: the shared screen, a camera tile, the lobby preview.",
+        "html": "<div class=\"ds-monitor\"><p class=\"ds-monitor-empty\">Compartilhe sua tela para começar.</p></div>",
+        "css": ".ds-monitor { position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; aspect-ratio: 16 / 9; border: 1px solid var(--color-rule-2); border-radius: var(--radius-sheet); background: var(--color-monitor); } .ds-monitor-empty { padding: 0 1.5rem; font-size: 0.875rem; line-height: 1.6; text-align: center; color: var(--color-monitor-ink); }"
+      },
+      {
+        "name": "The column header",
+        "trigger": "Every table header, band title and field label.",
+        "html": "<div class=\"ds-head\"><span class=\"ds-head-id\">ENTRAR</span><h2 class=\"ds-head-title\">Entrar em uma sala</h2></div>",
+        "css": ".ds-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 1.5rem; padding-bottom: 12px; border-bottom: 1px solid var(--color-rule); } .ds-head-id { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; color: var(--color-ink-3); } .ds-head-title { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-ink); }"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one primary action on a screen. Leader blue on the sheet; hover and active press one step darker.",
+      "html": "<button class=\"ds-btn-primary\">Iniciar agora</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0.625rem 1.25rem; border: 1px solid var(--color-signal); border-radius: var(--radius-sheet); background: var(--color-signal); color: var(--color-on-signal); font-family: var(--font-sans); font-size: 0.875rem; font-weight: 600; line-height: 1.5; cursor: pointer; transition: background-color 150ms linear, border-color 150ms linear; } .ds-btn-primary:hover { background: var(--color-signal-2); border-color: var(--color-signal-2); } .ds-btn-primary:active { background: var(--color-signal-2); } .ds-btn-primary:focus-visible { outline: 2px solid var(--color-signal); outline-offset: 2px; border-radius: var(--radius-cell); } .ds-btn-primary:disabled { pointer-events: none; opacity: 0.4; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "The second action. Sheet on the sheet, recessed to a band on hover; quiet until touched.",
+      "html": "<button class=\"ds-btn-secondary\">Abrir painel</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0.5rem 1rem; border: 1px solid var(--color-rule-2); border-radius: var(--radius-sheet); background: var(--color-sheet); color: var(--color-ink); font-family: var(--font-sans); font-size: 0.8125rem; font-weight: 600; line-height: 1.5; cursor: pointer; transition: background-color 150ms linear, border-color 150ms linear; } .ds-btn-secondary:hover { background: var(--color-band); border-color: var(--color-rule-3); } .ds-btn-secondary:active { background: var(--color-band-2); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--color-signal); outline-offset: 2px; border-radius: var(--radius-cell); }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Leaving the room. Outlined in attention red on the sheet, so the styling says what the label says.",
+      "html": "<button class=\"ds-btn-danger\">Sair</button>",
+      "css": ".ds-btn-danger { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0.5rem 1rem; border: 1px solid var(--color-alert-line); border-radius: var(--radius-sheet); background: var(--color-sheet); color: var(--color-alert); font-family: var(--font-sans); font-size: 0.8125rem; font-weight: 600; line-height: 1.5; cursor: pointer; transition: background-color 150ms linear, border-color 150ms linear, color 150ms linear; } .ds-btn-danger:hover { background: var(--color-alert-wash); border-color: var(--color-alert-line-2); } .ds-btn-danger:active { background: var(--color-alert-wash-2); } .ds-btn-danger:focus-visible { outline: 2px solid var(--color-signal); outline-offset: 2px; border-radius: var(--radius-cell); }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "A ruled field with a mono uppercase label on a hairline; the border turns leader blue on focus.",
+      "html": "<div class=\"ds-field\"><label class=\"ds-field-label\" for=\"ds-room\">Código ou link da reunião</label><input class=\"ds-input\" id=\"ds-room\" placeholder=\"Código ou link (ex: abc-def-ghi)\" value=\"\" oninput=\"this.setAttribute('value', this.value)\"></div>",
+      "css": ".ds-field { min-width: 0; } .ds-field-label { display: block; padding-bottom: 6px; border-bottom: 1px solid var(--color-rule); font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.13em; text-transform: uppercase; color: var(--color-ink-3); } .ds-field + .ds-field, .ds-field-body { margin-top: 0.5rem; } .ds-input { width: 100%; margin-top: 0.5rem; padding: 0.5rem 0.75rem; border: 1px solid var(--color-rule-2); border-radius: var(--radius-cell); background: var(--color-sheet); color: var(--color-ink); font-family: var(--font-sans); font-size: 0.875rem; font-variant-numeric: tabular-nums; transition: border-color 150ms linear; } .ds-input::placeholder { color: var(--color-ink-3); opacity: 1; } .ds-input:hover { border-color: var(--color-rule-3); } .ds-input:focus { border-color: var(--color-signal); outline: none; } .ds-input:focus-visible { outline: 2px solid var(--color-signal); outline-offset: 2px; }"
+    },
+    {
+      "name": "Sheet",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The only container in the system: a white sheet lifted off the desk paper, hairline border, 3px radius. Blocks inside it are Bands, never another sheet.",
+      "html": "<section class=\"ds-sheet\"><h3 class=\"ds-sheet-title\">Criar nova sala permanente</h3><p class=\"ds-sheet-prose\">Três campos, nada que interrompa — por isso uma faixa na folha, e não um modal.</p></section>",
+      "css": ".ds-sheet { padding: 1.5rem; border: 1px solid var(--color-rule); border-radius: var(--radius-sheet); background: var(--color-sheet); box-shadow: var(--shadow-lift); } .ds-sheet-title { margin: 0 0 8px; padding-bottom: 8px; border-bottom: 1px solid var(--color-rule); font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.01em; color: var(--color-ink); } .ds-sheet-prose { max-width: 62ch; margin: 0; font-size: 0.875rem; line-height: 1.6; color: var(--color-ink-2); }"
+    },
+    {
+      "name": "State Stamp",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "State as a column value: the word is the state, the tint only agrees with it. Three system states — PENDENTE, ATIVO, TRAVADO.",
+      "html": "<span class=\"ds-stamp\">Pública</span> <span class=\"ds-stamp is-active\"><span class=\"ds-stamp-dot\"></span>Compartilhando tela</span>",
+      "css": ".ds-stamp { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px; border: 1px solid var(--color-rule-2); border-radius: 2px; font-family: var(--font-mono); font-size: 10px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-ink-3); white-space: nowrap; } .ds-stamp.is-active { border-color: var(--color-signal); background: var(--color-signal-wash); color: var(--color-signal); } .ds-stamp-dot { width: 5px; height: 5px; border-radius: 9999px; background: var(--color-signal); }"
+    },
+    {
+      "name": "Capture Ruler Cell",
+      "kind": "custom",
+      "refersTo": "cell",
+      "description": "A cell holds a typed value, and a change leaves the amendment mark: the previous value struck through in graphite, the new one settled in ink.",
+      "html": "<div class=\"ds-cell\"><span class=\"ds-cell-label\">Áudio</span><div class=\"ds-cell-body\"><span class=\"ds-cell-value is-emphasis\">Sistema + mic</span></div></div>",
+      "css": ".ds-cell { min-width: 0; padding: 1rem 1.5rem; border-bottom: 1px solid var(--color-rule); } .ds-cell-label { display: block; padding-bottom: 6px; border-bottom: 1px solid var(--color-rule); font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.13em; text-transform: uppercase; color: var(--color-ink-3); } .ds-cell-body { margin-top: 10px; min-height: 1.75rem; } .ds-cell-value { font-family: var(--font-mono); font-size: 1.0625rem; line-height: 1; color: var(--color-ink); font-variant-numeric: tabular-nums; } .ds-cell-value.is-emphasis { font-size: 1.375rem; font-weight: 600; color: var(--color-signal); } .ds-cell-prev { margin-right: 8px; font-family: var(--font-mono); font-size: 0.8125rem; line-height: 1; color: var(--color-ink-3); text-decoration: line-through; text-decoration-color: var(--color-ink-4); }"
+    },
+    {
+      "name": "Sheet Nav",
+      "kind": "nav",
+      "refersTo": "nav",
+      "description": "The sheet's own head: wordmark left, one hairline, session controls right. No plan badge — the product has no plan.",
+      "html": "<header class=\"ds-nav\"><span class=\"ds-nav-mark\">My<span class=\"ds-nav-signal\">Screen</span></span><nav class=\"ds-nav-links\"><a class=\"ds-nav-link is-current\" href=\"#\">Painel</a><a class=\"ds-nav-link\" href=\"#\">Sair</a></nav></header>",
+      "css": ".ds-nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; height: 3.5rem; padding: 0 1rem; border-bottom: 1px solid var(--color-rule); background: var(--color-paper); } .ds-nav-mark { font-size: 1.0625rem; font-weight: 600; letter-spacing: -0.02em; color: var(--color-ink); } .ds-nav-signal { color: var(--color-signal); } .ds-nav-links { display: flex; align-items: center; gap: 4px; } .ds-nav-link { padding: 6px 10px; border: 1px solid transparent; border-radius: var(--radius-cell); font-size: 0.8125rem; font-weight: 500; color: var(--color-ink-2); text-decoration: none; transition: background-color 150ms linear, color 150ms linear; } .ds-nav-link:hover { background: var(--color-band); color: var(--color-ink); } .ds-nav-link.is-current { border-color: var(--color-signal-line); background: var(--color-signal-wash); color: var(--color-signal); } .ds-nav-link:focus-visible { outline: 2px solid var(--color-signal); outline-offset: 2px; }"
+    },
+    {
+      "name": "Monitor",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "The instrument face. Dark on purpose: a screen share, a camera tile or a lobby preview is judged against a neutral mid-dark surround, never against white paper.",
+      "html": "<div class=\"ds-monitor\"><p class=\"ds-monitor-empty\">Ninguém está compartilhando a tela.</p></div>",
+      "css": ".ds-monitor { position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; min-height: 45vh; border: 1px solid var(--color-rule-2); border-radius: var(--radius-sheet); background: var(--color-monitor); } .ds-monitor-empty { padding: 0 1.5rem; font-size: 0.875rem; line-height: 1.6; text-align: center; color: var(--color-monitor-ink); }"
+    },
+    {
+      "name": "Alert Block",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "A jammed sheet: attention red on its own wash, ruled on its own line. A page-level failure, not a floating banner.",
+      "html": "<p class=\"ds-alert\" role=\"alert\">Não foi possível criar a sala. Verifique sua conexão e tente novamente.</p>",
+      "css": ".ds-alert { margin: 0; padding: 0.75rem 1rem; border: 1px solid var(--color-alert-line); border-radius: 0; background: var(--color-alert-wash); color: var(--color-alert); font-size: 0.875rem; line-height: 1.5; }"
+    },
+    {
+      "name": "Command Key",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "One in-call key: a 15px glyph at 1.5 stroke with the state written underneath, so state never depends on colour alone.",
+      "html": "<button class=\"ds-key is-on\" aria-pressed=\"true\"><svg class=\"ds-key-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"square\" aria-hidden=\"true\"><path d=\"M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z\"/><path d=\"M19 11a7 7 0 0 1-14 0M12 18v3\"/></svg><span>Microfone ligado</span></button>",
+      "css": ".ds-key { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 8px; border: 0; background: var(--color-sheet); color: var(--color-ink-2); font-family: var(--font-sans); font-size: 0.6875rem; line-height: 1; cursor: pointer; transition: background-color 150ms linear, color 150ms linear; } .ds-key:hover { background: var(--color-band); color: var(--color-ink); } .ds-key.is-on { background: var(--color-signal-wash); color: var(--color-signal); } .ds-key-icon { width: 15px; height: 15px; } .ds-key:focus-visible { outline: 2px solid var(--color-signal); outline-offset: -3px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "A Cut Sheet",
+    "overview": "MyScreen is the broadcast edit decision list, rendered as a real document. A cool neutral desk, a white sheet lifted a hair off it, hairline rules in warm gray, near-black ink for anything that was measured, pencil gray for anything that was not, and exactly one accent — a deep printed leader blue — reserved for the primary action and for live state. Archivo carries headings and body with real cap discipline; Spline Sans Mono carries every id, timecode, time and value, with tabular figures so numeric columns line up the way a column has to line up. The maximum radius is 3px, because a cut sheet has no rounded corners, and depth comes from rules and paper lift rather than from decorative shadow.\n\nThe system's spine is the amendment mark. A value cell that changes does not pop a toast: the previous value stays on the sheet, struck through in graphite, while the new one settles in ink, and the swap is announced in a visually-hidden aria-live region for anyone who cannot see it happen. A change is a record, not a notification. That single interaction repeats on every surface carrying a ruler — the home band and the pre-call lobby run the same CaptureRuler component, so the home page's promise that this is the ruler you operate in the lobby is literally true rather than aspirational.\n\nThe world is engineer-honest, and honesty is a visual commitment here, not only a copy one. State is a column value, never a colour alone: stamps read PENDENTE / ATIVO / TRAVADO, the participants roster writes \"Câmera desligada\" and \"Microfone mudo\", the microphone meter writes \"Captando áudio\" / \"Silêncio\" / \"Indisponível\". The stats panel renders an unmeasured value as -- and a never-measured one as n/d. There is no badge, plan, tier, testimonial, logo or screenshot anywhere in this product, so no surface may imply one exists.",
+    "keyCharacteristics": [
+      "One accent (leader blue #1b3a7d), used for the primary action and for live state only.",
+      "The ruler is load-bearing: cells, mono values and consequence lines repeat identically on the landing page and in the lobby.",
+      "Density over decoration; one primary action per screen; hierarchy from space, rule and weight.",
+      "The monitor is dark on purpose — the one documented exception to the paper ground, because that is how a video image is judged.",
+      "Nothing floats over the sheet: warnings are ruled rows, room creation is an inline band."
+    ],
+    "rules": [
+      { "name": "The One Signal Rule", "section": "colors", "body": "Leader blue appears for the primary action and for live state. It is never decorative, never a second CTA, and never an illustration colour. On the landing page exactly one element is blue: \"Iniciar agora\"." },
+      { "name": "The Ink Ladder Rule", "section": "colors", "body": "Body copy is ink, secondary copy is ink-2, and anything unmeasured, instrumental or de-emphasised is ink-3 — the lightest step that still passes 4.5:1 on the sheet and the paper. ink-4 measures 2.7:1 and is forbidden for copy: it exists only for disabled borders, rules and the strike decoration on an amended value." },
+      { "name": "The Monitor Exception", "section": "colors", "body": "Video surfaces are dark. A screen share, a camera tile and the lobby preview sit on #101114 because a neutral mid-dark surround is how you judge an image, and a white page around it lies to the eye about brightness. Because the ground there is the monitor and not the sheet, monitor copy uses monitor-ink (6.0:1), which is deliberately lighter than ink-3. No other surface may use monitor as a background, and no non-video surface may use monitor-ink as text." },
+      { "name": "The Tokenized Alert Rule", "section": "colors", "body": "Attention is a name, not a literal. Alert, alert-line, alert-wash (and their -2 tones) plus warn and warn-dot exist so that no raw hex ever appears in a className across src/. A second brand colour is the failure mode this rule exists to prevent." },
+      { "name": "The Two Voices Rule", "section": "typography", "body": "Archivo says something; Spline Sans Mono reports a fact. Any string containing a value, an id, a time, a count or a setting is mono with tabular figures, and tabular figures are applied globally to input, select, textarea and button — a numeric column that does not align is a broken column." },
+      { "name": "The Label Is A Rule Rule", "section": "typography", "body": "Every column header and field label is a mono uppercase caption in ink-3 sitting on a hairline. It is data structure, not a floating label." },
+      { "name": "The Rules Carry Depth Rule", "section": "elevation", "body": "No shadow does structural work, and nothing inside a sheet shadows. Nested depth is expressed with band / band-2 and a hairline; if a block needs a shadow to be readable, it is a second Sheet and should be a Band instead." },
+      { "name": "The Two Shadows Rule", "section": "elevation", "body": "If a new surface needs a third shadow, it has found a new job: either it is a sheet (use lift) or it is the modal (use overlay). There is no third category." }
+    ],
+    "dos": [
+      "Do put every value change through Cell + useAmendment, so the previous value stays struck through in graphite and the swap is announced — on every surface, not only where it is most visible.",
+      "Do keep state a column value: write PENDENTE / ATIVO / TRAVADO, \"Câmera desligada\", \"Captando áudio\", \"Falando...\" next to the control or the gauge, and pair the colour.",
+      "Do use CaptureRuler for any new capture control surface rather than a parallel implementation, and keep its two rows on the same breakpoints so the option cells stay under the value cells they change.",
+      "Do derive consequence copy from the current values, and keep it inside 62ch in ink-2 with a second ink-3 line for audio.",
+      "Do measure a new text colour against the sheet, the paper and the band before adding it; ink-3 is the floor for copy, and the fourth ink step is for rules.",
+      "Do reach for bg-monitor only behind a video element, and for a raised block only for the Sheet (lift) and the settings modal (overlay).",
+      "Do let the focus ring be a marked cell: 2px signal outline, 2px offset, 2px radius, with negative-offset variants on full-cell radio/checkbox targets.",
+      "Do keep the surface set's responsiveness honest: two to four columns at md, stage split at lg, table scroll inside the sheet, 100dvh plus viewportFit: \"cover\"."
+    ],
+    "donts": [
+      "Don't put copy in ink-4 or on rule-2-scale grays. It measures 2.7:1; it is for disabled borders, rules and the strike on an amended value, and nothing else.",
+      "Don't use leader blue for anything but the primary action and live state, and don't introduce a second accent. A second brand colour is how attention stops meaning attention.",
+      "Don't signal state by colour alone — no green/red dots, no unlabelled toggles, no colour-only \"live\" badge. Every state also carries a word, a shape or an aria value.",
+      "Don't invent numbers. Unmeasured is --; never-measured is n/d; a zero where the measurement does not exist is a lie, and RTT on the receiving side is exactly that case.",
+      "Don't add a modal for a short, non-interrupting task. Room creation is an inline band on the sheet for exactly this reason; the settings dialog earns its overlay only because it interrupts a live call.",
+      "Don't use a toast for a value change, and don't hide content during an animation. The amendment starts from a visible state; a fade-in from opacity: 0 would erase the very record the interaction exists to keep.",
+      "Don't nest a Sheet inside a Sheet, exceed 3px of radius, add a third shadow, or put a kicker/eyebrow above a title.",
+      "Don't add a logo, favicon, screenshot, testimonial, sponsor logo, user count or plan badge. None exists in the repository, and the product is MIT-distributed with no commercial offer.",
+      "Don't round a claim up into a metric. n/d and -- are a product-level honesty commitment that outranks visual tidiness.",
+      "Don't ship a dark theme as an extension of this file. Dark is explicitly out of scope for this round, deferred by the user: it would need a second ink ladder re-measured against a dark paper, a re-measured ink-4 boundary, a decision on whether monitor survives as a distinct step, and a prefers-color-scheme strategy the single-source @theme block has no room for."
+    ]
+  },
+  "gaps": [
+    {
+      "topic": "dark-theme",
+      "status": "out-of-scope, deferred by the user",
+      "detail": "No dark theme exists in this build and none may be described as current. The earlier dark theme was replaced, not extended. A future version needs a second ink ladder measured against a dark paper, a redefined ink-4 boundary, a decision on whether monitor survives as a distinct step, and a prefers-color-scheme strategy."
+    },
+    {
+      "topic": "in-call surfaces not runtime-captured",
+      "status": "known limitation",
+      "detail": "ConferenceRoom, MediaControls, SettingsModal, LocalRecorder, TrackStatsDropdown, ParticipantsList and ChatSidebar are typechecked, linted and code-reviewed but were not runtime-captured: verification needs a live LiveKit SFU plus a real screen-share source, and Docker was unavailable. They must not be described as visually verified. Rendered evidence in .impeccable/review/ covers the home, dashboard, login, register and the lobby preview."
+    },
+    {
+      "topic": "src/lib/validate.ts FIELD_LABELS",
+      "status": "out-of-scope defect, recorded not repaired",
+      "detail": "fieldLabel('password') returns \"A senha\" and str() appends \"deve ser preenchido.\", producing \"A senha deve ser preenchido.\" — wrong agreement in pt-BR. src/lib/ is user-scoped as preserved, so the bug was left in place. Fix belongs in the validation layer."
+    },
+    {
+      "topic": "input boundary contrast",
+      "status": "measured limitation",
+      "detail": "inputClass strokes with rule-2 (#b9b9b0), 1.98:1 on the sheet — below the 3:1 non-text threshold. The boundary is reinforced by the mono uppercase label on a hairline, the rule-3 hover border (3.5:1) and the signal focus border (10.8:1), but the resting state is carried by the label, not the border contrast."
+    }
+  ]
+}

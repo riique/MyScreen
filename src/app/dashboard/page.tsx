@@ -1,107 +1,79 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { copyToClipboard } from "@/lib/clipboard";
 import Link from "next/link";
-import {
-  Plus,
-  Video,
-  Lock,
-  Globe,
-  Copy,
-  Check,
-  Calendar,
-  Shield,
-  LayoutDashboard,
-  AlertCircle,
-} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { copyToClipboard } from "@/lib/clipboard";
+import { Sheet, SheetTitle, Stamp, inputClass } from "@/components/sheet";
 
-const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500";
-
-type FormField = "title" | "customId" | "password";
-
-interface RoomItem {
+interface Room {
   id: string;
   title: string;
   isLocked: boolean;
   createdAt: string;
 }
 
-/**
- * A API devolve texto livre (`Campo "customId" tem formato inválido.`,
- * `Este ID de sala já está em uso.`). Traduz para o campo do formulário para
- * que o leitor de tela anuncie `aria-invalid` no input certo.
- */
-const FORM_FIELDS: FormField[] = ["title", "customId", "password"];
+const FORM_FIELDS = ["title", "customId", "password"] as const;
+type FormField = (typeof FORM_FIELDS)[number];
 
 /**
- * Ultimo recurso: infere o campo pelo texto. So e usado quando a API nao
- * mandou `field` (erro 409 de sala duplicada, por exemplo).
- *
- * Nao casa por `includes("id")`: "invalido" contem "id" e fazia um erro de
- * TITULO marcar o campo de ID da sala.
+ * Sem campo `field` na resposta, o texto da mensagem ainda diz qual campo é.
+ * Casa por frase, nunca pela palavra solta: "id" aparece dentro de "senha da
+ * sala", "sala", "válido" e quase todo outro lado, e casar só com a palavra
+ * esconderia o erro no lugar errado.
  */
 function errorFieldFor(message: string): FormField | null {
-  const normalized = message.toLowerCase();
-  if (normalized.includes("id da sala")) return "customId";
-  if (normalized.includes("senha")) return "password";
-  if (normalized.includes("titulo") || normalized.includes("título")) return "title";
+  const m = message.toLowerCase();
+  if (m.includes("id da sala")) return "customId";
+  if (m.includes("senha")) return "password";
+  if (m.includes("titulo") || m.includes("título")) return "title";
   return null;
 }
 
-export default function DashboardPage() {
-  const [rooms, setRooms] = useState<RoomItem[]>([]);
+export default function Dashboard() {
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
-  /** Sessao expirada: a API responde 401, o que antes virava estado vazio. */
   const [authRequired, setAuthRequired] = useState(false);
-  /** Erro de carga (rede/500) — distinto de "nao tenho salas". */
   const [loadError, setLoadError] = useState(false);
-  /** Sala criada sem conta: o painel nao a lista, entao mostramos o link. */
-  const [anonymousRoom, setAnonymousRoom] = useState<RoomItem | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Form states
+  const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
   const [customId, setCustomId] = useState("");
   const [password, setPassword] = useState("");
-  const [formError, setFormError] = useState("");
-  const [errorField, setErrorField] = useState<FormField | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formField, setFormField] = useState<FormField | null>(null);
+
+  const [anonymousRoom, setAnonymousRoom] = useState<Room | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  /** Copia falhou: mostramos o link para copiar a mao. */
   const [copyFailedId, setCopyFailedId] = useState<string | null>(null);
 
-  const fetchRooms = async () => {
+  const fetchRooms = useCallback(async () => {
     try {
-      const res = await fetch("/api/rooms");
+      const res = await fetch("/api/rooms", { cache: "no-store" });
       if (res.status === 401) {
         setAuthRequired(true);
         setRooms([]);
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setAuthRequired(false);
-      setLoadError(false);
-      setRooms(Array.isArray(data.rooms) ? data.rooms : []);
-    } catch (err) {
-      console.error("Erro ao carregar salas:", err);
+      const data: { rooms: Room[] } = await res.json();
+      setRooms(data.rooms);
+    } catch (error) {
+      console.error("Erro ao carregar salas:", error);
       setLoadError(true);
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchRooms();
   }, []);
 
-  const handleCreateRoom = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError("");
-    setErrorField(null);
-    setCreating(true);
+  useEffect(() => {
+    void fetchRooms();
+  }, [fetchRooms]);
 
+  async function handleCreate(event: React.SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCreating(true);
+    setFormError(null);
+    setFormField(null);
     try {
       const res = await fetch("/api/rooms", {
         method: "POST",
@@ -112,29 +84,25 @@ export default function DashboardPage() {
           password: password.trim() || undefined,
         }),
       });
-
       const data = await res.json();
       if (!res.ok) {
-        const message: string = data.error || "Erro ao criar sala.";
+        const message = data.error || "Erro ao criar sala.";
         setFormError(message);
-        // `withErrorHandling` ja devolve `field` no corpo; so recorre ao texto
-        // quando a resposta nao o traz (409 de id duplicado, 500).
-        const fromApi = data.field;
-        setErrorField(
-          FORM_FIELDS.includes(fromApi) ? (fromApi as FormField) : errorFieldFor(message)
+        setFormField(
+          typeof data.field === "string" && (FORM_FIELDS as readonly string[]).includes(data.field)
+            ? (data.field as FormField)
+            : errorFieldFor(message),
         );
         return;
       }
 
-      closeModal();
       setTitle("");
       setCustomId("");
       setPassword("");
 
-      if (data.anonymous) {
-        // Sala sem dono: ela existe e tem link, mas nunca vai aparecer nesta
-        // lista. Sem mostrar o link aqui, o usuario perde a reuniao que acabou
-        // de criar sem nenhum aviso.
+      // Sala anônima não entra no painel: o banco não sabe de quem é. O link é
+      // a única cópia que existe, então ele aparece inteiro e já vem copiado.
+      if (data.anonymous === true) {
         setAnonymousRoom(data.room);
         setCopiedId(data.room.id);
         void copyToClipboard(`${window.location.origin}/room/${data.room.id}`);
@@ -143,371 +111,320 @@ export default function DashboardPage() {
       await fetchRooms();
     } catch {
       setFormError("Erro de comunicação ao criar sala.");
-      setErrorField(null);
+      setFormField(null);
     } finally {
       setCreating(false);
     }
-  };
+  }
 
-  const copyRoomLink = async (roomId: string) => {
-    const url = `${window.location.origin}/room/${roomId}`;
-    // Só anunciar "copiado" quando a escrita realmente aconteceu: em contexto
-    // não seguro a API não existe e o clique pareceria quebrado.
-    if (await copyToClipboard(url)) {
+  async function copyRoomLink(roomId: string) {
+    const ok = await copyToClipboard(`${window.location.origin}/room/${roomId}`);
+    if (ok) {
+      setCopyFailedId(null);
       setCopiedId(roomId);
-      setTimeout(() => setCopiedId(null), 2500);
     } else {
-      // A copia falhou: o painel de salas mostra o endereco em texto para
-      // copiar a mao, entao nao ha estado separado para avisar.
+      // Sem clipboard o link ainda precisa sobreviver: vira texto selecionável.
       setCopyFailedId(roomId);
-      setTimeout(() => setCopyFailedId(null), 4000);
+      setCopiedId(null);
     }
-  };
+  }
 
-  const openModal = () => {
-    setFormError("");
-    setErrorField(null);
-    setIsModalOpen(true);
-  };
+  if (loading) {
+    return (
+      <div className="mx-auto w-full max-w-[1180px] px-4 py-16 sm:px-6">
+        <p className="font-mono text-[0.8125rem] text-ink-3">Carregando salas...</p>
+      </div>
+    );
+  }
 
-  const closeModal = () => {
-    setFormError("");
-    setErrorField(null);
-    setIsModalOpen(false);
-  };
+  if (authRequired) {
+    return (
+      <div className="mx-auto w-full max-w-[34rem] px-4 py-20 sm:px-6">
+        <Sheet className="p-7">
+          <SheetTitle className="text-[1.375rem]">Sua sessão expirou</SheetTitle>
+          <p className="mt-2 text-[0.875rem] leading-[1.6] text-ink-2">
+            Entre novamente para ver as salas vinculadas à sua conta.
+          </p>
+          <Link
+            href="/login"
+            className="mt-6 inline-flex items-center justify-center border border-signal bg-signal px-4 py-2 text-[0.8125rem] font-semibold text-on-signal transition-colors hover:bg-signal-2 [border-radius:var(--radius-sheet)]"
+          >
+            Entrar novamente
+          </Link>
+        </Sheet>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="mx-auto w-full max-w-[34rem] px-4 py-20 sm:px-6">
+        <Sheet className="p-7">
+          <SheetTitle className="text-[1.375rem]">
+            Não foi possível carregar suas salas
+          </SheetTitle>
+          <p className="mt-2 text-[0.875rem] leading-[1.6] text-ink-2">
+            Verifique sua conexão e tente novamente.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setLoading(true);
+              setLoadError(false);
+              void fetchRooms();
+            }}
+            className="mt-6 inline-flex items-center justify-center border border-rule-2 bg-sheet px-4 py-2 text-[0.8125rem] font-semibold text-ink transition-colors hover:bg-band [border-radius:var(--radius-sheet)]"
+          >
+            Tentar novamente
+          </button>
+        </Sheet>
+      </div>
+    );
+  }
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-10 sm:px-6">
-      {/* Header */}
-      <div className="flex flex-col justify-between gap-4 border-b border-border/60 pb-8 sm:flex-row sm:items-center">
+    <div className="mx-auto w-full max-w-[1180px] px-4 pb-24 sm:px-6">
+      <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3 pt-12 sm:pt-16">
         <div>
-          <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-indigo-400">
-            <LayoutDashboard className="h-4 w-4" />
-            <span>Painel de Controle</span>
-          </div>
-          <h1 className="text-3xl font-extrabold text-white">Suas Salas de Reunião</h1>
-          <p className="mt-1 text-sm text-gray-400">
+          <SheetTitle>Suas salas de reunião</SheetTitle>
+          <p className="mt-2 max-w-[54ch] text-[0.9375rem] leading-[1.6] text-ink-2">
             Gerencie salas permanentes e acesse o link de transmissão a qualquer momento.
           </p>
         </div>
-
-        <button
-          type="button"
-          onClick={openModal}
-          className={`flex cursor-pointer items-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 transition-all hover:bg-indigo-500 ${FOCUS_RING}`}
-        >
-          <Plus className="h-4 w-4" />
-          <span>Criar Nova Sala</span>
-        </button>
       </div>
 
-      {/* Sala criada sem conta: ela existe e tem link, mas nao volta nesta lista. */}
-      {anonymousRoom && (
-        <div
-          role="status"
-          className="mt-6 flex flex-col gap-3 rounded-2xl border border-indigo-500/40 bg-indigo-500/10 p-4 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-white">
-              Sala &quot;{anonymousRoom.title}&quot; criada
-            </p>
-            <p className="mt-0.5 text-xs text-indigo-200">
-              {copiedId === anonymousRoom.id
-                ? "Link copiado para a area de transferencia."
-                : "Salas criadas sem conta nao ficam salvas no painel. Guarde o link agora."}
-            </p>
-            <code className="mt-2 block select-all break-all rounded-lg bg-black/40 px-2.5 py-1.5 font-mono text-[11px] text-indigo-100">
-              {typeof window !== "undefined"
-                ? `${window.location.origin}/room/${anonymousRoom.id}`
-                : `/room/${anonymousRoom.id}`}
-            </code>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            <button
-              type="button"
-              onClick={() => void copyRoomLink(anonymousRoom.id)}
-              className={`rounded-xl border border-indigo-400/40 px-4 py-2 text-xs font-semibold text-indigo-200 transition-colors hover:bg-indigo-500/20 ${FOCUS_RING}`}
-            >
-              Copiar link
-            </button>
-            <button
-              type="button"
-              onClick={() => setAnonymousRoom(null)}
-              className={`rounded-xl px-3 py-2 text-xs font-semibold text-gray-400 transition-colors hover:text-white ${FOCUS_RING}`}
-            >
-              Fechar
-            </button>
+      {/* Sala anônima: o link é a única cópia que existe. */}
+      {anonymousRoom ? (
+        <div className="mt-8 border border-signal-line bg-signal-wash px-5 py-4 sm:px-6">
+          <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+            <div className="min-w-0">
+              <h2 className="text-[0.9375rem] font-semibold text-ink">
+                Sala &quot;{anonymousRoom.title}&quot; criada
+              </h2>
+              <p className="mt-1 max-w-[62ch] text-[0.8125rem] leading-[1.5] text-ink-2">
+                Salas criadas sem conta não ficam salvas no painel. Guarde o link agora.
+              </p>
+              <p className="mt-2 break-all font-mono text-[0.8125rem] text-ink">
+                {`${typeof window !== "undefined" ? window.location.origin : ""}/room/${anonymousRoom.id}`}
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button
+                type="button"
+                onClick={() => copyRoomLink(anonymousRoom.id)}
+                className="border border-rule-2 bg-sheet px-3 py-1.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:bg-band [border-radius:var(--radius-sheet)]"
+              >
+                {copiedId === anonymousRoom.id ? "Copiado" : "Copiar link"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAnonymousRoom(null);
+                  setCopiedId(null);
+                }}
+                className="border border-transparent px-3 py-1.5 text-[0.8125rem] text-ink-2 transition-colors hover:text-ink [border-radius:var(--radius-sheet)]"
+              >
+                Fechar
+              </button>
+            </div>
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* Rooms Grid */}
-      <div className="mt-8">
-        {loading ? (
-          <div className="flex justify-center py-20">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
-          </div>
-        ) : authRequired ? (
-          <div className="mx-auto max-w-lg rounded-2xl border border-amber-500/30 bg-amber-500/5 p-12 text-center">
-            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-amber-500/15 text-amber-400">
-              <Lock className="h-6 w-6" />
-            </div>
-            <h3 className="text-lg font-bold text-white">Sua sessao expirou</h3>
-            <p className="mb-6 mt-1 text-sm text-gray-400">
-              Entre novamente para ver as salas vinculadas a sua conta.
-            </p>
-            <Link
-              href="/login"
-              className={`inline-block rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-500 ${FOCUS_RING}`}
+      {/* Criar sala é uma faixa na própria folha, não um modal: são três campos,
+          nadainterruptivo, e a regra do mundo é que nada flutua sobre a folha. */}
+      <Sheet className="mt-8">
+        <form onSubmit={handleCreate} className="p-5 sm:p-6" noValidate>
+          <h2 className="border-b border-rule pb-2 text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">
+            Criar nova sala permanente
+          </h2>
+
+          {formError ? (
+            <p
+              id="form-erro-criar-sala"
+              role="alert"
+              className="mt-4 border border-alert-line bg-alert-wash px-3.5 py-2.5 text-[0.8125rem] text-alert"
             >
-              Entrar novamente
-            </Link>
-          </div>
-        ) : loadError ? (
-          <div
-            role="alert"
-            className="mx-auto max-w-lg rounded-2xl border border-red-500/30 bg-red-500/5 p-12 text-center"
-          >
-            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-red-500/15 text-red-400">
-              <AlertCircle className="h-6 w-6" />
-            </div>
-            <h3 className="text-lg font-bold text-white">Nao foi possivel carregar suas salas</h3>
-            <p className="mb-6 mt-1 text-sm text-gray-400">
-              Verifique sua conexao e tente novamente.
+              {formError}
             </p>
-            <button
-              type="button"
-              onClick={() => {
-                setLoading(true);
-                void fetchRooms();
-              }}
-              className={`rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-500 ${FOCUS_RING}`}
-            >
-              Tentar novamente
-            </button>
-          </div>
-        ) : rooms.length === 0 ? (
-          <div className="mx-auto max-w-lg rounded-2xl border border-dashed border-border/80 bg-[#11131c]/60 p-12 text-center">
-            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600/20 text-indigo-400">
-              <Video className="h-6 w-6" />
-            </div>
-            <h3 className="text-lg font-bold text-white">Nenhuma sala salva ainda</h3>
-            <p className="mb-6 mt-1 text-sm text-gray-400">
-              Crie sua primeira sala permanente com ID personalizado ou protecao por senha.
-            </p>
-            <button
-              type="button"
-              onClick={openModal}
-              className={`rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-500 ${FOCUS_RING}`}
-            >
-              Criar Minha Primeira Sala
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {rooms.map((room) => (
-              <div
-                key={room.id}
-                className="group flex flex-col justify-between rounded-2xl border border-border/80 bg-[#11131c] p-6 shadow-xl transition-all hover:border-indigo-500/50"
+          ) : null}
+
+          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label
+                htmlFor="sala-title"
+                className="block border-b border-rule pb-1.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3"
               >
-                <div>
-                  <div className="mb-3 flex items-start justify-between gap-2">
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${
-                        room.isLocked
-                          ? "border-amber-500/20 bg-amber-500/10 text-amber-400"
-                          : "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
-                      }`}
+                Título da sala
+              </label>
+              <input
+                id="sala-title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Ex: Sala de Reunião da Diretoria"
+                required
+                maxLength={120}
+                aria-invalid={formField === "title"}
+                className={`${inputClass} mt-2`}
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="sala-custom-id"
+                className="block border-b border-rule pb-1.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3"
+              >
+                ID personalizado
+              </label>
+              <div className="mt-2 flex items-stretch">
+                <span className="flex items-center border border-r-0 border-rule-2 bg-band px-2.5 font-mono text-[0.8125rem] text-ink-3 [border-radius:var(--radius-cell)_0_0_var(--radius-cell)]">
+                  /room/
+                </span>
+                <input
+                  id="sala-custom-id"
+                  value={customId}
+                  onChange={(e) => setCustomId(e.target.value)}
+                  placeholder="minha-sala-vip"
+                  maxLength={32}
+                  aria-invalid={formField === "customId"}
+                  className={`${inputClass} font-mono [border-radius:0_var(--radius-cell)_var(--radius-cell)_0]`}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="sala-password"
+                className="block border-b border-rule pb-1.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3"
+              >
+                Senha de acesso
+              </label>
+              <input
+                id="sala-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Deixe em branco para sala aberta"
+                aria-invalid={formField === "password"}
+                className={`${inputClass} mt-2`}
+              />
+            </div>
+          </div>
+
+          <div className="mt-6 flex justify-end">
+            <button
+              type="submit"
+              disabled={creating}
+              className="border border-signal bg-signal px-5 py-2.5 text-[0.875rem] font-semibold text-on-signal transition-colors hover:bg-signal-2 disabled:pointer-events-none disabled:opacity-40 [border-radius:var(--radius-sheet)]"
+            >
+              {creating ? "Criando..." : "Salvar sala"}
+            </button>
+          </div>
+        </form>
+      </Sheet>
+
+      {/* A lista é uma tabela pautada: o formato nativo da folha. */}
+      {rooms.length === 0 ? (
+        <Sheet className="mt-8 p-7">
+          <h2 className="text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">
+            Nenhuma sala salva ainda
+          </h2>
+          <p className="mt-2 max-w-[54ch] text-[0.875rem] leading-[1.6] text-ink-2">
+            Crie sua primeira sala permanente com ID personalizado ou proteção por senha.
+          </p>
+        </Sheet>
+      ) : (
+        <Sheet className="mt-8 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[42rem] border-collapse text-left">
+              <caption className="sr-only">
+                Salas criadas por esta conta, com ID, estado de acesso e data de criação
+              </caption>
+              <thead>
+                <tr className="border-b border-rule bg-band">
+                  <th
+                    scope="col"
+                    className="px-5 py-2.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3"
+                  >
+                    Sala
+                  </th>
+                  <th
+                    scope="col"
+                    className="px-5 py-2.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3"
+                  >
+                    ID
+                  </th>
+                  <th
+                    scope="col"
+                    className="px-5 py-2.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3"
+                  >
+                    Acesso
+                  </th>
+                  <th
+                    scope="col"
+                    className="px-5 py-2.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3"
+                  >
+                    Criada
+                  </th>
+                  <th scope="col" className="px-5 py-2.5" />
+                </tr>
+              </thead>
+              <tbody>
+                {rooms.map((room) => (
+                  <tr key={room.id} className="border-b border-rule last:border-b-0">
+                    <th
+                      scope="row"
+                      className="px-5 py-4 text-[0.875rem] font-medium text-ink [font-weight:500]"
                     >
-                      {room.isLocked ? (
-                        <>
-                          <Lock className="h-3 w-3" />
-                          <span>Com Senha</span>
-                        </>
-                      ) : (
-                        <>
-                          <Globe className="h-3 w-3" />
-                          <span>Pública</span>
-                        </>
-                      )}
-                    </span>
-
-                    <span className="flex items-center gap-1 font-mono text-xs text-gray-400">
-                      <Calendar className="h-3 w-3" />
+                      {room.title}
+                    </th>
+                    <td className="px-5 py-4 font-mono text-[0.8125rem] text-ink-2">
+                      {room.id}
+                    </td>
+                    <td className="px-5 py-4">
+                      <Stamp state={room.isLocked ? "travado" : "pendente"}>
+                        {room.isLocked ? "Com senha" : "Pública"}
+                      </Stamp>
+                    </td>
+                    <td className="px-5 py-4 font-mono text-[0.8125rem] text-ink-3">
                       {new Date(room.createdAt).toLocaleDateString("pt-BR")}
-                    </span>
-                  </div>
-
-                  <h3 className="text-lg font-bold text-white transition-colors group-hover:text-indigo-400">
-                    {room.title}
-                  </h3>
-                  <p className="mt-1 font-mono text-xs text-gray-400">ID: {room.id}</p>
-                </div>
-
-                <div className="mt-6 flex items-center gap-2 border-t border-border/60 pt-4">
-                  <Link
-                    href={`/room/${room.id}`}
-                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-indigo-600 py-2.5 text-xs font-semibold text-white shadow-md shadow-indigo-600/20 transition-all hover:bg-indigo-500 ${FOCUS_RING}`}
-                  >
-                    <Video className="h-3.5 w-3.5" />
-                    <span>Entrar na Sala</span>
-                  </Link>
-
-                  <button
-                    type="button"
-                    onClick={() => void copyRoomLink(room.id)}
-                    aria-label={
-                      copiedId === room.id
-                        ? `Link da sala ${room.title} copiado`
-                        : `Copiar link da sala ${room.title}`
-                    }
-                    className={`flex h-10 w-10 items-center justify-center rounded-xl border border-border/80 bg-[#181b26] text-gray-300 transition-colors hover:bg-secondary ${FOCUS_RING}`}
-                  >
-                    {copiedId === room.id ? (
-                      <Check className="h-4 w-4 text-emerald-400" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </button>
-                </div>
-
-                {copyFailedId === room.id && (
-                  <code
-                    role="status"
-                    className="mt-2 block select-all break-all rounded-lg bg-black/40 px-2.5 py-1.5 font-mono text-[11px] text-amber-200"
-                  >
-                    Não foi possível copiar automaticamente. Copie o endereço:{" "}
-                    {`${typeof window !== "undefined" ? window.location.origin : ""}/room/${room.id}`}
-                  </code>
-                )}
-              </div>
-            ))}
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => copyRoomLink(room.id)}
+                          aria-label={
+                            copiedId === room.id
+                              ? `Link da sala ${room.title} copiado`
+                              : `Copiar link da sala ${room.title}`
+                          }
+                          className="border border-rule-2 bg-sheet px-3 py-1.5 text-[0.8125rem] text-ink transition-colors hover:bg-band [border-radius:var(--radius-cell)]"
+                        >
+                          {copiedId === room.id ? "Copiado" : "Copiar"}
+                        </button>
+                        <Link
+                          href={`/room/${room.id}`}
+                          className="border border-rule-2 bg-sheet px-3 py-1.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:border-rule-3 hover:bg-band [border-radius:var(--radius-cell)]"
+                        >
+                          Entrar
+                        </Link>
+                      </div>
+                      {copyFailedId === room.id ? (
+                        <p className="mt-2 max-w-[22rem] text-right text-[0.75rem] leading-[1.45] text-ink-3">
+                          Não foi possível copiar automaticamente. Copie o endereço:{" "}
+                          <span className="break-all font-mono text-ink-2">
+                            {`${window.location.origin}/room/${room.id}`}
+                          </span>
+                        </p>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        )}
-      </div>
-
-      {/* Modal Criar Sala */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="criar-sala-titulo"
-            className="w-full max-w-md rounded-2xl border border-border/80 bg-[#11131c] p-6 shadow-2xl"
-          >
-            <h2 id="criar-sala-titulo" className="mb-1 text-xl font-bold text-white">
-              Criar Nova Sala Permanente
-            </h2>
-            <p className="mb-5 text-xs text-gray-400">
-              Personalize o título, ID da URL e proteja com senha se desejar.
-            </p>
-
-            {formError && (
-              <div
-                id="form-erro-criar-sala"
-                role="alert"
-                className="mb-4 rounded-xl border border-red-500/40 bg-red-950/60 p-3 text-xs text-red-200"
-              >
-                {formError}
-              </div>
-            )}
-
-            <form onSubmit={handleCreateRoom} className="space-y-4">
-              <div>
-                <label
-                  htmlFor="room-title"
-                  className="mb-1 block text-xs font-medium text-gray-300"
-                >
-                  Título da Sala *
-                </label>
-                <input
-                  id="room-title"
-                  name="title"
-                  type="text"
-                  required
-                  autoComplete="off"
-                  placeholder="Ex: Sala de Reunião da Diretoria"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  aria-invalid={errorField === "title"}
-                  aria-describedby={errorField === "title" ? "form-erro-criar-sala" : undefined}
-                  className={`w-full rounded-xl border border-border bg-[#181b26] px-3.5 py-2.5 text-sm text-white placeholder-gray-400 focus:border-indigo-500 focus:outline-none ${FOCUS_RING} ${
-                    errorField === "title" ? "border-red-500/70" : ""
-                  }`}
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="room-custom-id"
-                  className="mb-1 block text-xs font-medium text-gray-300"
-                >
-                  ID Personalizado da URL (Opcional)
-                </label>
-                <div className="flex items-center rounded-xl border border-border bg-[#181b26] px-3 py-2 text-xs text-gray-400 focus-within:border-indigo-500">
-                  <span className="shrink-0 text-gray-400">/room/</span>
-                  <input
-                    id="room-custom-id"
-                    name="customId"
-                    type="text"
-                    autoComplete="off"
-                    placeholder="minha-sala-vip"
-                    value={customId}
-                    onChange={(e) => setCustomId(e.target.value)}
-                    aria-invalid={errorField === "customId"}
-                    aria-describedby={
-                      errorField === "customId" ? "form-erro-criar-sala" : undefined
-                    }
-                    className={`ml-1 flex-1 rounded bg-transparent text-sm text-white placeholder-gray-400 focus:outline-none ${FOCUS_RING} ${
-                      errorField === "customId" ? "text-red-200" : ""
-                    }`}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label
-                  htmlFor="room-password"
-                  className="mb-1 flex items-center gap-1.5 text-xs font-medium text-gray-300"
-                >
-                  <Shield className="h-3.5 w-3.5 text-amber-400" />
-                  <span>Senha de Acesso (Opcional)</span>
-                </label>
-                <input
-                  id="room-password"
-                  name="password"
-                  type="password"
-                  autoComplete="new-password"
-                  placeholder="Deixe em branco para sala aberta"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  aria-invalid={errorField === "password"}
-                  aria-describedby={errorField === "password" ? "form-erro-criar-sala" : undefined}
-                  className={`w-full rounded-xl border border-border bg-[#181b26] px-3.5 py-2.5 text-sm text-white placeholder-gray-400 focus:border-indigo-500 focus:outline-none ${FOCUS_RING} ${
-                    errorField === "password" ? "border-red-500/70" : ""
-                  }`}
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className={`rounded-xl px-4 py-2.5 text-xs font-medium text-gray-400 transition-colors hover:text-white ${FOCUS_RING}`}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={creating}
-                  className={`cursor-pointer rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-semibold text-white shadow-lg shadow-indigo-600/30 transition-all hover:bg-indigo-500 disabled:opacity-50 ${FOCUS_RING}`}
-                >
-                  {creating ? "Criando..." : "Salvar Sala"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Sheet>
       )}
     </div>
   );

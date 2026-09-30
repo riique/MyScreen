@@ -1,12 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { Tv, User as UserIcon, LogOut, LayoutDashboard } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-
-const FOCUS_RING =
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090a0f]";
+import { useEffect, useState } from "react";
+import { cn } from "@/lib/utils";
 
 interface UserProfile {
   id: string;
@@ -14,18 +11,23 @@ interface UserProfile {
   email: string;
 }
 
+/**
+ * A cabeca da folha. Marca a esquerda, um fio, controles de sessao a direita.
+ *
+ * Sem carimbo "PRO": o produto e distribuido sob MIT e nao tem plano, tier nem
+ * oferta, e um badge que promete um plano que nao existe e um claim inventado
+ * — a interface nao pode carregar um.
+ *
+ * Enquanto a sessao carrega, o slot reserva a largura final em vez de sumir:
+ * uma barra que encolhe depois da hidratacao obriga o olho a refazer a
+ * leitura da pagina.
+ */
 export function Navbar() {
-  const [user, setUser] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
   const router = useRouter();
   const pathname = usePathname();
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Revalida a sessão a cada navegação. Com `[]` a busca rodava uma vez e a
-  // Navbar — montada pelo layout raiz, que o App Router mantém vivo entre
-  // navegações client-side — ficava com estado obsoleto: apos `router.push`
-  // do login, o cookie existia mas a barra continuava mostrando "Entrar".
-  // `router.refresh()` re-renderiza Server Components, nao remonta Client
-  // Components nem re-executa seus efeitos.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -43,9 +45,11 @@ export function Navbar() {
     return () => {
       cancelled = true;
     };
+    // `pathname` e a chave: o layout raiz continua montado na navegacao do
+    // cliente, e um fetch so no mount deixaria a barra desatualizada apos login.
   }, [pathname]);
 
-  const handleLogout = async () => {
+  async function handleLogout() {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
       setUser(null);
@@ -54,81 +58,81 @@ export function Navbar() {
     } catch (error) {
       console.error("Logout error:", error);
     }
-  };
+  }
 
   const onDashboard = Boolean(pathname?.startsWith("/dashboard"));
 
+  const linkBase =
+    "border px-2.5 py-1.5 text-[0.8125rem] font-medium transition-colors [border-radius:var(--radius-cell)]";
+
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-border/60 bg-[#090a0f]/80 backdrop-blur-md">
-      <div className="container mx-auto flex h-16 items-center justify-between gap-2 px-4 sm:gap-4 sm:px-6">
-        {/* min-w-0 + truncate: a marca cede espaco em vez de empurrar as acoes
-            para fora da viewport em telas estreitas. */}
+    <header className="sticky top-0 z-40 w-full border-b border-rule bg-paper/92 backdrop-blur-sm">
+      <div className="mx-auto flex h-14 w-full max-w-[1180px] items-center justify-between gap-4 px-4 sm:px-6">
         <Link
           href="/"
-          className={`group flex min-w-0 items-center gap-2.5 rounded-xl ${FOCUS_RING}`}
+          className="-ml-1 flex min-w-0 items-center px-1 py-1 text-ink transition-opacity hover:opacity-70"
         >
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white shadow-lg shadow-indigo-500/25 transition-transform duration-200 group-hover:scale-105">
-            <Tv className="h-5 w-5" />
-          </div>
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-xl font-bold tracking-tight text-white">
-              My<span className="text-indigo-400">Screen</span>
-            </span>
-            <span className="hidden shrink-0 rounded-full border border-indigo-500/20 bg-indigo-500/10 px-2 py-0.5 text-[10px] font-semibold text-indigo-400 sm:inline-block">
-              PRO
-            </span>
-          </div>
+          <span className="text-[1.0625rem] font-semibold tracking-[-0.02em]">
+            My<span className="text-signal">Screen</span>
+          </span>
         </Link>
 
-        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-          {!loading && (
+        <div className="flex h-full shrink-0 items-center gap-1 sm:gap-2">
+          {loading ? (
+            <div aria-hidden className="h-[1.75rem] w-[9.5rem]" />
+          ) : user ? (
             <>
-              {user ? (
-                <div className="flex items-center gap-2 sm:gap-3">
-                  <Link
-                    href="/dashboard"
-                    aria-label="Painel"
-                    aria-current={onDashboard ? "page" : undefined}
-                    className={`flex items-center gap-2 rounded-lg border border-border/80 bg-secondary/80 px-2.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-secondary sm:px-3.5 ${FOCUS_RING}`}
-                  >
-                    <LayoutDashboard className="h-4 w-4 shrink-0 text-indigo-400" />
-                    <span className="hidden sm:inline">Painel</span>
-                  </Link>
-
-                  <div className="flex items-center gap-2.5 rounded-lg border border-border/60 bg-[#121520] px-3 py-1.5">
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-indigo-500/30 bg-indigo-600/20 text-xs font-semibold text-indigo-300">
-                      {user.name.charAt(0).toUpperCase()}
-                    </div>
-                    <span className="hidden text-sm font-medium text-gray-200 sm:inline">
-                      {user.name}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleLogout}
-                      aria-label="Sair da conta"
-                      className={`ml-1 rounded-md p-1 text-gray-400 transition-colors hover:text-red-400 ${FOCUS_RING}`}
-                    >
-                      <LogOut className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 sm:gap-2.5">
-                  <Link
-                    href="/login"
-                    className={`rounded-lg px-2.5 py-2 text-sm font-medium text-gray-300 transition-colors hover:text-white sm:px-3.5 ${FOCUS_RING}`}
-                  >
-                    Entrar
-                  </Link>
-                  <Link
-                    href="/register"
-                    className={`flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-md shadow-indigo-600/20 transition-colors hover:bg-indigo-500 sm:px-4 ${FOCUS_RING}`}
-                  >
-                    <UserIcon className="h-4 w-4 shrink-0" />
-                    <span>Cadastrar</span>
-                  </Link>
-                </div>
-              )}
+              <Link
+                href="/dashboard"
+                aria-label="Painel"
+                aria-current={onDashboard ? "page" : undefined}
+                className={cn(
+                  linkBase,
+                  onDashboard
+                    ? "border-signal-line bg-signal-wash text-signal"
+                    : "border-transparent text-ink-2 hover:border-rule hover:bg-band hover:text-ink",
+                )}
+              >
+                Painel
+              </Link>
+              <span
+                className="hidden max-w-[10rem] truncate text-[0.8125rem] text-ink-2 md:inline"
+                title={user.email}
+              >
+                {user.name}
+              </span>
+              <button
+                type="button"
+                onClick={handleLogout}
+                aria-label="Sair da conta"
+                className={cn(
+                  linkBase,
+                  "border-transparent text-ink-2 hover:border-rule hover:bg-band hover:text-ink",
+                )}
+              >
+                Sair
+              </button>
+            </>
+          ) : (
+            <>
+              <Link
+                href="/login"
+                className={cn(
+                  linkBase,
+                  "border-transparent text-ink-2 hover:border-rule hover:bg-band hover:text-ink",
+                )}
+              >
+                Entrar
+              </Link>
+              <Link
+                href="/register"
+                className={cn(
+                  linkBase,
+                  "border-rule-2 bg-sheet font-semibold text-ink hover:border-rule-3 hover:bg-band",
+                )}
+              >
+                Cadastrar
+              </Link>
             </>
           )}
         </div>

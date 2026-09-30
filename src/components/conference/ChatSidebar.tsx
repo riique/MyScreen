@@ -1,11 +1,8 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
 import { useChat } from "@livekit/components-react";
-import { Send, X, MessageSquare, AlertCircle } from "lucide-react";
-
-const FOCUS_RING =
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500";
+import { MessageSquare, Send, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 const SEND_ERROR_MESSAGE =
   "Não foi possível enviar a mensagem. Verifique sua conexão e tente novamente.";
@@ -15,6 +12,14 @@ interface ChatSidebarProps {
   onClose: () => void;
 }
 
+/**
+ * O chat é um livro de ocorrências, não uma pilha de balões.
+ *
+ * Balões redondos com cauda são a forma de conversa de fantasia, e esconderiam o
+ * que importa num registro técnico: quem mandou, quando, e em ordem. Aqui cada
+ * mensagem é uma linha pautada com autor e hora em mono à esquerda — dá para
+ * varrer a coluna e achar a linha que importa.
+ */
 export function ChatSidebar({ isOpen, onClose }: ChatSidebarProps) {
   const { chatMessages, send, isSending } = useChat();
   const [draft, setDraft] = useState("");
@@ -23,52 +28,43 @@ export function ChatSidebar({ isOpen, onClose }: ChatSidebarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (isOpen) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
+    if (isOpen) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages, isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
+  async function handleSend(event: React.SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
     const text = draft.trim();
     if (!text || isSending) return;
 
     setSendError(null);
     try {
       await send(text);
-      // Só limpamos depois da confirmação: enquanto o envio está em voo o
-      // texto permanece visível, e o `messageSubject` do SDK só emite eco local
-      // depois que o `sendText` conclui.
+      // Só limpamos depois da confirmação: enquanto o envio está em voo o texto
+      // fica visível, e o eco local do SDK só chega quando `send` conclui.
       setDraft("");
-    } catch (err) {
-      console.error("Falha ao enviar mensagem:", err);
+    } catch (error) {
+      console.error("Falha ao enviar mensagem:", error);
       setSendError(SEND_ERROR_MESSAGE);
-      // Devolve o texto ao campo, sem apagar o que o usuário tiver digitado
-      // durante a espera.
+      // Devolve o texto sem apagar o que a pessoa tiver digitado na espera.
       setDraft((current) => (current.trim() ? current : text));
       inputRef.current?.focus();
     }
-  };
+  }
 
-  const handleDraftChange = (value: string) => {
+  function handleDraftChange(value: string) {
     setDraft(value);
     if (sendError) setSendError(null);
-  };
-
-  const formatTimestamp = (ts: number) => {
-    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  };
+  }
 
   return (
-    <div className="flex h-full w-full shrink-0 flex-col border-l border-border/80 bg-[#0d0f17] text-white shadow-2xl animate-in slide-in-from-right duration-200 sm:w-80 md:w-96">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border/60 px-4 py-3.5 bg-[#11131c]">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-indigo-400" />
-          <h3 className="font-semibold text-sm">Bate-papo da Reunião</h3>
-          <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] text-gray-400">
+    <aside className="flex h-full w-full shrink-0 flex-col border-l border-rule bg-sheet lg:w-[22rem]">
+      <div className="flex items-center justify-between gap-3 border-b border-rule bg-band px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <MessageSquare size={14} strokeWidth={1.5} aria-hidden className="shrink-0 text-ink-3" />
+          <h2 className="truncate text-[0.875rem] font-semibold text-ink">Bate-papo da reunião</h2>
+          <span className="shrink-0 font-mono text-[0.75rem] text-ink-3">
             {chatMessages.length}
           </span>
         </div>
@@ -76,71 +72,65 @@ export function ChatSidebar({ isOpen, onClose }: ChatSidebarProps) {
           type="button"
           onClick={onClose}
           aria-label="Fechar bate-papo"
-          className={`rounded-lg p-1 text-gray-400 transition-colors hover:bg-secondary hover:text-white ${FOCUS_RING}`}
+          className="shrink-0 border border-transparent px-1.5 py-1 text-ink-3 transition-colors hover:border-rule hover:bg-sheet hover:text-ink [border-radius:var(--radius-cell)]"
         >
-          <X className="h-4 w-4" />
+          <X size={15} strokeWidth={1.5} aria-hidden />
         </button>
       </div>
 
-      {/* Messages Feed */}
-      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto">
         {chatMessages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center py-12 text-center text-gray-400">
-            <MessageSquare className="mb-2 h-10 w-10 opacity-60" />
-            <p className="text-sm font-medium">Nenhuma mensagem ainda</p>
-            <p className="mt-1 text-xs text-gray-400">
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-6 py-12 text-center">
+            <p className="text-[0.875rem] font-medium text-ink-2">Nenhuma mensagem ainda</p>
+            <p className="text-[0.8125rem] text-ink-3">
               Envie a primeira mensagem para a sala!
             </p>
           </div>
         ) : (
-          chatMessages.map((msg) => {
-            // Autoridade do SDK: `isLocal` distingue o remetente real.
-            // Comparar `name`/`identity` rotula mensagens de outras pessoas
-            // como suas sempre que o apelido coincidir como prefixo.
-            const isMe = msg.from?.isLocal === true;
-
-            return (
-              <div
-                key={msg.id || msg.timestamp}
-                className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
-              >
-                <div className="mb-1 flex items-baseline gap-2 px-1">
-                  <span className="text-xs font-semibold text-gray-300">
-                    {isMe ? "Você" : msg.from?.name || "Participante"}
-                  </span>
-                  <span className="font-mono text-[10px] text-gray-400">
-                    {formatTimestamp(msg.timestamp)}
-                  </span>
-                </div>
-
-                <div
-                  className={`max-w-[85%] break-words rounded-2xl px-3.5 py-2 text-sm leading-relaxed ${
-                    isMe
-                      ? "rounded-br-none bg-indigo-600 text-white shadow-md shadow-indigo-600/20"
-                      : "rounded-bl-none border border-border/60 bg-[#181c28] text-gray-100"
-                  }`}
-                >
-                  {msg.message}
-                </div>
-              </div>
-            );
-          })
+          <ul className="divide-y divide-rule">
+            {chatMessages.map((msg) => {
+              // `isLocal` é a autoridade do SDK. Comparar `name`/`identity`
+              // rotularia como suas as mensagens de outra pessoa sempre que os
+              // apelidos coincidissem.
+              const isMe = msg.from?.isLocal === true;
+              return (
+                <li key={msg.id || msg.timestamp} className="px-4 py-3">
+                  <div className="flex items-baseline gap-2">
+                    <span className="truncate text-[0.8125rem] font-medium text-ink">
+                      {isMe ? "Você" : msg.from?.name || "Participante"}
+                    </span>
+                    <span className="ml-auto shrink-0 font-mono text-[0.6875rem] text-ink-3">
+                      {new Date(msg.timestamp).toLocaleTimeString("pt-BR", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  </div>
+                  <p
+                    className={`mt-1 break-words text-[0.875rem] leading-[1.5] [text-wrap:pretty] ${
+                      isMe ? "text-ink" : "text-ink-2"
+                    }`}
+                  >
+                    {msg.message}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
         )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Form */}
-      <form onSubmit={handleSend} className="border-t border-border/60 p-3 bg-[#11131c]">
-        {sendError && (
+      <form onSubmit={handleSend} className="border-t border-rule bg-band p-3">
+        {sendError ? (
           <p
             role="alert"
-            className="mb-2 flex items-start gap-1.5 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-relaxed text-red-300"
+            className="mb-2 border border-alert-line bg-alert-wash px-3 py-2 text-[0.8125rem] leading-[1.45] text-alert"
           >
-            <AlertCircle aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0 text-red-400" />
             {sendError}
           </p>
-        )}
-        <div className="flex items-center gap-2 rounded-xl border border-border bg-[#181c28] px-3 py-1.5 focus-within:border-indigo-500 transition-colors">
+        ) : null}
+        <div className="flex items-stretch gap-2">
           <label htmlFor="chat-message-input" className="sr-only">
             Mensagem
           </label>
@@ -152,19 +142,19 @@ export function ChatSidebar({ isOpen, onClose }: ChatSidebarProps) {
             autoComplete="off"
             placeholder="Digite uma mensagem..."
             value={draft}
-            onChange={(e) => handleDraftChange(e.target.value)}
-            className={`flex-1 rounded-md bg-transparent text-sm text-white placeholder-gray-400 ${FOCUS_RING}`}
+            onChange={(event) => handleDraftChange(event.target.value)}
+            className="min-w-0 flex-1 border border-rule-2 bg-sheet px-3 py-2 text-[0.875rem] text-ink transition-colors hover:border-rule-3 focus:border-signal focus:outline-none [border-radius:var(--radius-cell)]"
           />
           <button
             type="submit"
             aria-label="Enviar mensagem"
             disabled={!draft.trim() || isSending}
-            className={`flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white transition-all hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 ${FOCUS_RING}`}
+            className="flex w-10 shrink-0 items-center justify-center border border-signal bg-signal text-on-signal transition-colors hover:bg-signal-2 disabled:pointer-events-none disabled:opacity-40 [border-radius:var(--radius-cell)]"
           >
-            <Send className="h-4 w-4" />
+            <Send size={15} strokeWidth={1.5} aria-hidden />
           </button>
         </div>
       </form>
-    </div>
+    </aside>
   );
 }

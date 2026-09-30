@@ -41,6 +41,13 @@ services:
       - .env
     environment:
       DATABASE_URL: "file:/app/data/database.sqlite"
+      # Derivada do DOMAIN, nunca do `.env`. Um `.env` reaproveitado de
+      # desenvolvimento carrega `ws://localhost:7880`, e o `deploy.sh` so
+      # escreve esta variavel quando o arquivo NAO existe — em producao o
+      # navegador receberia `ws://localhost/rtc/v1` e a sinalizacao nunca
+      # abriria. Como o Caddy so encaminha `/rtc*` para o SFU e o SDK anexa
+      # `/rtc/v1`, `wss://<DOMAIN>` e exatamente a URL publica correta.
+      NEXT_PUBLIC_LIVEKIT_URL: "wss://${DOMAIN:-localhost}"
     volumes:
       - app-data:/app/data
     depends_on:

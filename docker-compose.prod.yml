@@ -1,0 +1,120 @@
+# ==============================================================================
+# MyScreen — Compose para host com reverse proxy PRÉ-EXISTENTE
+# ==============================================================================
+#
+# O `docker-compose.yml` da raiz assume que ele é o dono da borda: o serviço
+# `caddy` dele publica 80/443 e faz o TLS com Let's Encrypt. Isso é correto
+# num VPS dedicado, e está errado aqui.
+#
+# Neste host a borda JÁ EXISTE e não é nossa:
+#
+#   Cloudflare (proximo) -> cloudflared (tunnel) -> Caddy do host :3050
+#        ->  /rtc*  ->  127.0.0.1:7880   (LiveKit, network_mode: host)
+#        ->  /*     ->  127.0.0.1:3055   (este compose)
+#
+# O mesmo `caddy.service` tambem serve `hallow`, `api.haumea.fun` e o staging.
+# Subir o `caddy` do compose aqui tomaria 80/443 do systemd, derrubaria esses
+# tres sites e ainda assim nao resolveria o TLS, porque a origem e um tunnel
+# do Cloudflare e nao um IP publico com Let's Encrypt. Por isso este arquivo
+# NAO tem servico `caddy` e NAO publica 80/443.
+#
+# O que muda em relacao ao compose da raiz:
+#   - `app`     -> 127.0.0.1:3055 (e nao 3000 exposto): o Caddy do host so
+#                 alcanca o app por loopback.
+#   - `livekit` -> `network_mode: host`: o Caddy do host faz proxy de
+#                 `/rtc*` para `127.0.0.1:7880`, um address de loopback. Num
+#                 bridge o 7880 deixaria de existir no host e a sinalizacao
+#                 cairia. Em compensacao o SFU passa a expor TURN e as portas
+#                 de midia direto no host, sem `ports:` — o que o UFW ve.
+#   - `migrate` -> mantido: e o que impede o app de atender 500 antes do schema.
+#
+# O nome do projeto (`myscreen`) e o volume (`myscreen_app-data`) NAO podem
+# mudar: e o que segura o SQLite de producao (contas, senhas e salas).
+# ==============================================================================
+
+services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: deps
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "file:/app/data/database.sqlite"
+    volumes:
+      - app-data:/app/data
+    command: ["npx", "--no-install", "prisma", "db", "push", "--skip-generate"]
+    restart: "no"
+    networks:
+      - myscreen-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Loopback apenas. O Caddy do host e o unico cliente; a internet nunca
+    # alcanca 3055 diretamente.
+    ports:
+      - "127.0.0.1:3055:3000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "file:/app/data/database.sqlite"
+      # Derivada do DOMAIN, nunca do `.env`. Um `.env` reaproveitado de
+      # desenvolvimento carrega `ws://localhost:7880` e a sinalizacao nunca
+      # abriria. O Caddy do host encaminha `/rtc*` para o SFU e o SDK anexa
+      # `/rtc/v1`, logo `wss://<DOMAIN>` e a URL publica correta.
+      NEXT_PUBLIC_LIVEKIT_URL: "wss://${DOMAIN:-localhost}"
+    volumes:
+      - app-data:/app/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - myscreen-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    # `--node-ip` e o IP publico do roteador, com DNAT para 192.168.0.66.
+    # `use_external_ip: false` + `advertise_internal_ip: true` no livekit.yaml
+    # sao o par que funciona neste NAT: deixar a deteccao automatica escolher
+    # ja fez o SFU anunciar o IP interno antes.
+    command: --config /etc/livekit.yaml --node-ip 191.191.116.181
+    network_mode: host
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    # Sem `ports:` de proposito: em `network_mode: host` o Compose ignora o
+    # mapeamento e o processo ja escuta no host. 7880/7881 sao alcancados pelo
+    # Caddy em loopback; 3478 e o relay sao alcancados direto pela internet.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  myscreen-network:
+    driver: bridge
+
+volumes:
+  app-data:

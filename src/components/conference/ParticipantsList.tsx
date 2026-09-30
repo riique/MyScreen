@@ -1,133 +1,135 @@
 "use client";
 
+import { useParticipants, useRoomContext } from "@livekit/components-react";
+import { Track, type Participant } from "livekit-client";
 import { useMemo } from "react";
-import { useLocalParticipant, useParticipants } from "@livekit/components-react";
-import { Video, VideoOff, X, Users, Monitor, MicOff, Mic } from "lucide-react";
-import { Participant, Track } from "livekit-client";
-
-const FOCUS_RING =
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500";
+import { SheetHead } from "@/components/sheet";
 
 interface ParticipantsListProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
+/**
+ * A roster é uma coluna: quem está, com o que está ligado. O estado de cada
+ * pessoa é escrito por extenso — "Câmera desligada", "Microfone mudo" — porque
+ * um ícone sozinho obriga a pessoa a decorar o alfabeto de ícones da casa, e
+ * "quem está sem microfone" é a pergunta real numa sala de 1 a few.
+ *
+ * O participante local vem de `useRoomContext().localParticipant` e não de
+ * `useLocalParticipant()`: o hook devolve um tipo mesclado cuja forma muda
+ * entre versões, e a roster inteira perderia a tipagem por causa de um elemento.
+ */
 export function ParticipantsList({ isOpen, onClose }: ParticipantsListProps) {
+  const room = useRoomContext();
   const remoteParticipants = useParticipants();
-  const { localParticipant } = useLocalParticipant();
 
-  // `useParticipants()` devolve apenas `room.remoteParticipants`; o
-  // participante local precisa ser composto à mão, senão a lista nunca mostra
-  // quem está lendo e o contador fica defasado em um.
   const participants = useMemo(
-    () => (localParticipant ? [localParticipant, ...remoteParticipants] : remoteParticipants),
-    [localParticipant, remoteParticipants]
+    () => [room.localParticipant, ...remoteParticipants],
+    [room.localParticipant, remoteParticipants],
   );
 
   if (!isOpen) return null;
 
   const isTrackMuted = (p: Participant, source: Track.Source) => {
-    const pub = p.getTrackPublication(source);
-    return !pub || pub.isMuted;
-  };
-
-  const hasScreenShare = (p: Participant) => {
-    const pub = p.getTrackPublication(Track.Source.ScreenShare);
-    return Boolean(pub && !pub.isMuted);
+    const publication = p.getTrackPublication(source);
+    return !publication || publication.isMuted;
   };
 
   return (
-    <div className="flex h-full w-full shrink-0 flex-col border-l border-border/80 bg-[#0d0f17] text-white shadow-2xl animate-in slide-in-from-right duration-200 sm:w-80 md:w-96">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border/60 px-4 py-3.5 bg-[#11131c]">
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-indigo-400" />
-          <h3 className="font-semibold text-sm">Participantes</h3>
-          <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] text-gray-400">
-            {participants.length}
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Fechar lista de participantes"
-          className={`rounded-lg p-1 text-gray-400 transition-colors hover:bg-secondary hover:text-white ${FOCUS_RING}`}
-        >
-          <X className="h-4 w-4" />
-        </button>
+    <aside className="flex h-full w-full shrink-0 flex-col border-l border-rule bg-sheet lg:w-[20rem]">
+      <div className="px-4 py-3">
+        <SheetHead
+          title="Participantes"
+          meta={`${participants.length}`}
+          action={
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Fechar lista de participantes"
+              className="border border-rule-2 px-2 py-1 text-[0.75rem] text-ink-2 transition-colors hover:bg-band hover:text-ink [border-radius:var(--radius-cell)]"
+            >
+              Fechar
+            </button>
+          }
+        />
       </div>
 
-      {/* Participants list */}
-      <div className="flex-1 space-y-2 overflow-y-auto p-3">
+      <ul className="flex-1 divide-y divide-rule overflow-y-auto">
         {participants.map((p) => {
-          const isLocal = p.isLocal === true;
-          const micMuted = isTrackMuted(p, Track.Source.Microphone);
           const camMuted = isTrackMuted(p, Track.Source.Camera);
-          const sharingScreen = hasScreenShare(p);
+          const micMuted = isTrackMuted(p, Track.Source.Microphone);
+          const sharing = p.getTrackPublication(Track.Source.ScreenShare) !== undefined;
 
           return (
-            <div
-              key={p.identity}
-              className="flex items-center justify-between rounded-xl border border-border/50 bg-[#141724] p-3 transition-colors hover:border-indigo-500/30"
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-indigo-500/20 bg-indigo-600/20 text-sm font-bold text-indigo-300">
-                  {(p.name || p.identity).charAt(0).toUpperCase()}
-                </div>
-                <div className="flex flex-col">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-sm font-semibold text-gray-200">
-                      {p.name || p.identity}
-                    </span>
-                    {isLocal && (
-                      <span className="rounded border border-indigo-500/20 bg-indigo-500/10 px-1.5 py-0.5 text-[10px] font-medium text-indigo-400">
-                        Você
-                      </span>
-                    )}
-                  </div>
-                  {p.isSpeaking && (
-                    <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-400">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-ping" />
-                      Falando...
-                    </span>
-                  )}
-                </div>
+            <li key={p.identity} className="px-4 py-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="truncate text-[0.875rem] font-medium text-ink">
+                  {p.name || p.identity}
+                  {p.isLocal ? (
+                    <span className="ml-1.5 font-mono text-[0.6875rem] text-ink-3">(Você)</span>
+                  ) : null}
+                </span>
+                {p.isSpeaking ? (
+                  <span className="shrink-0 font-mono text-[0.625rem] uppercase tracking-[0.1em] text-signal">
+                    Falando...
+                  </span>
+                ) : null}
               </div>
 
-              {/* Status Icons */}
-              <div className="flex items-center gap-2 text-gray-400">
-                {sharingScreen && (
-                  <div
-                    className="rounded border border-emerald-500/20 bg-emerald-500/10 p-1 text-emerald-400"
+              <dl className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                <Status
+                  label="Câmera"
+                  value={camMuted ? "desligada" : "ligada"}
+                  on={!camMuted}
+                  title={camMuted ? "Câmera desligada" : "Câmera ligada"}
+                />
+                <Status
+                  label="Microfone"
+                  value={micMuted ? "mudo" : "ativo"}
+                  on={!micMuted}
+                  title={micMuted ? "Microfone mudo" : "Microfone ativo"}
+                />
+                {sharing ? (
+                  <Status
+                    label="Tela"
+                    value="compartilhando"
+                    on
                     title="Compartilhando tela"
-                  >
-                    <Monitor className="h-3.5 w-3.5" />
-                  </div>
-                )}
-                {camMuted ? (
-                  <div className="p-1 text-red-400" title="Câmera desligada">
-                    <VideoOff className="h-3.5 w-3.5" />
-                  </div>
-                ) : (
-                  <div className="p-1 text-gray-300" title="Câmera ligada">
-                    <Video className="h-3.5 w-3.5" />
-                  </div>
-                )}
-                {micMuted ? (
-                  <div className="p-1 text-red-400" title="Microfone mudo">
-                    <MicOff className="h-3.5 w-3.5" />
-                  </div>
-                ) : (
-                  <div className="p-1 text-emerald-400" title="Microfone ativo">
-                    <Mic className="h-3.5 w-3.5" />
-                  </div>
-                )}
-              </div>
-            </div>
+                  />
+                ) : null}
+              </dl>
+            </li>
           );
         })}
-      </div>
+      </ul>
+    </aside>
+  );
+}
+
+/** Estado como valor escrito, com o rótulo da coluna ao lado. */
+function Status({
+  label,
+  value,
+  on,
+  title,
+}: {
+  label: string;
+  value: string;
+  on: boolean;
+  title: string;
+}) {
+  return (
+    <div className="flex items-baseline gap-1.5" title={title}>
+      <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-ink-3">
+        {label}
+      </dt>
+      <dd
+        className={`text-[0.75rem] ${on ? "text-ink-2" : "text-ink-3"}`}
+        aria-label={`${label}: ${value}`}
+      >
+        {value}
+      </dd>
     </div>
   );
 }

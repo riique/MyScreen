@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Home, RefreshCw } from "lucide-react";
+import { useEffect } from "react";
+import { Sheet, SheetTitle } from "@/components/sheet";
 
-export default function ErrorPage({
+export default function Error({
   error,
   reset,
 }: {
@@ -12,66 +12,47 @@ export default function ErrorPage({
   reset: () => void;
 }) {
   const router = useRouter();
-  const [devMessage, setDevMessage] = useState<string | null>(null);
 
-  // Em produção o Next.js sanitiza a mensagem do erro; só mostramos em dev.
   useEffect(() => {
-    if (process.env.NODE_ENV === "production") return;
-    try {
-      setDevMessage(error?.message || null);
-    } catch {
-      setDevMessage(null);
-    }
+    console.error("Erro não tratado na tela:", error);
   }, [error]);
 
   return (
-    <div className="flex min-h-dvh items-center justify-center px-4 py-12">
-      <div className="flex w-full max-w-md flex-col items-center gap-5 rounded-2xl border border-red-500/30 bg-[#0f111a] p-8 text-center shadow-2xl">
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10 text-red-400">
-          <AlertTriangle className="h-6 w-6" />
-        </div>
+    <div className="mx-auto w-full max-w-[34rem] px-4 py-20 sm:px-6">
+      <Sheet className="p-7">
+        <SheetTitle className="text-[1.375rem]">Algo deu errado por aqui</SheetTitle>
+        <p className="mt-2 max-w-[52ch] text-[0.875rem] leading-[1.6] text-ink-2">
+          Não conseguimos continuar esta tela. Tente novamente — se o problema persistir,
+          volte ao início e entre na sala outra vez.
+        </p>
 
-        <div className="space-y-2">
-          <h1 className="text-lg font-semibold text-gray-100">
-            Algo deu errado por aqui
-          </h1>
-          <p className="text-sm leading-relaxed text-gray-400">
-            Não conseguimos continuar esta tela. Tente novamente — se o problema
-            persistir, volte ao início e entre na sala outra vez.
-          </p>
-        </div>
-
-        <div className="flex w-full flex-col gap-2 sm:flex-row">
+        <div className="mt-6 flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => reset()}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 transition-colors hover:bg-indigo-500"
+            onClick={reset}
+            className="border border-signal bg-signal px-4 py-2 text-[0.8125rem] font-semibold text-on-signal transition-colors hover:bg-signal-2 [border-radius:var(--radius-sheet)]"
           >
-            <RefreshCw className="h-4 w-4" />
             Tentar novamente
           </button>
           <button
             type="button"
             onClick={() => router.push("/")}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border/60 bg-[#181b26] px-4 py-2.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-secondary"
+            className="border border-rule-2 bg-sheet px-4 py-2 text-[0.8125rem] font-semibold text-ink transition-colors hover:bg-band [border-radius:var(--radius-sheet)]"
           >
-            <Home className="h-4 w-4" />
             Voltar ao início
           </button>
         </div>
 
         {error.digest ? (
-          <p className="w-full break-all rounded-lg border border-border/60 bg-[#0b0d14] px-3 py-2 font-mono text-[11px] leading-relaxed text-gray-500">
+          <p className="mt-5 border-t border-rule pt-4 font-mono text-[0.75rem] text-ink-3">
             Código do erro: {error.digest}
           </p>
         ) : null}
 
-        {devMessage ? (
-          <pre className="w-full overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-red-500/20 bg-red-950/40 px-3 py-2 text-left font-mono text-[11px] leading-relaxed text-red-300">
-            {devMessage}
-          </pre>
+        {process.env.NODE_ENV !== "production" ? (
+          <p className="mt-3 font-mono text-[0.75rem] text-ink-3">{error.message}</p>
         ) : null}
-      </div>
+      </Sheet>
     </div>
   );
 }

@@ -8,9 +8,11 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run lint",
+    "check": "npm run typecheck && npm run lint && npm run test",
     "db:push": "prisma db push",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.2",
@@ -32,12 +34,14 @@
     "@types/node": "^22.13.5",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
+    "@vitest/coverage-v8": "^5.0.2",
     "eslint": "^9.39.5",
     "eslint-config-next": "^15.5.26",
     "postcss": "^8.5.3",
     "prisma": "^6.4.1",
     "tailwindcss": "^4.0.9",
     "tailwindcss-animate": "^1.0.7",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^5.0.2"
   }
 }

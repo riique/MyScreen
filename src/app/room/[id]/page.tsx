@@ -1,168 +1,149 @@
 "use client";
 
-import { useCallback, useEffect, useState, use } from "react";
 import dynamic from "next/dynamic";
-import { GreenRoom } from "@/components/conference/GreenRoom";
-import { AlertCircle } from "lucide-react";
-
-// Code-split: o SDK do LiveKit (bundle de ~530 KB) só deve ser baixado
-// depois que o usuário efetivamente entra na sala, nunca no lobby.
-const ConferenceRoom = dynamic(
-  () =>
-    import("@/components/conference/ConferenceRoom").then(
-      (m) => m.ConferenceRoom
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex min-h-dvh items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-10 w-10 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
-          <span className="text-sm text-gray-400">Preparando sala...</span>
-        </div>
-      </div>
-    ),
-  }
-);
-
-const TOKEN_REFRESH_INTERVAL_MS = 10 * 60 * 1000; // 10 minutos
+import { use, useCallback, useEffect, useState } from "react";
+import { Sheet } from "@/components/sheet";
+import { GreenRoom, type GreenRoomJoinConfig } from "@/components/conference/GreenRoom";
 
 interface RoomPageProps {
   params: Promise<{ id: string }>;
 }
 
+interface RoomInfo {
+  title: string;
+  isLocked: boolean;
+}
+
+/** O token do LiveKit vive 6h; renovar na metade evita cair no meio da call. */
+const TOKEN_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+
+/**
+ * O SDK do LiveKit entra dinamico e sem SSR: ele vale meio megabyte de bundle e
+ * nao precisa existir enquanto a pessoa ainda esta no lobby conferindo camera e
+ * microfone. A folha do lobby monta sem ele.
+ */
+const ConferenceRoom = dynamic(
+  () => import("@/components/conference/ConferenceRoom").then((m) => m.ConferenceRoom),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="mx-auto w-full max-w-[34rem] px-4 py-20 sm:px-6">
+        <p className="font-mono text-[0.8125rem] text-ink-3">Preparando sala...</p>
+      </div>
+    ),
+  },
+);
+
 export default function RoomPage({ params }: RoomPageProps) {
   const { id } = use(params);
   const roomId = id.toLowerCase().trim();
 
-  // Room state
-  const [roomInfo, setRoomInfo] = useState<{
-    title: string;
-    isLocked: boolean;
-  } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [userProfile, setUserProfile] = useState<{ name: string } | null>(null);
+  const [userName, setUserName] = useState<string | null>(null);
+  const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
 
-  // Conference state
-  const [joined, setJoined] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [serverUrl, setServerUrl] = useState<string | null>(null);
-  const [participantName, setParticipantName] = useState("");
-  // Identidade fixa do participante: reenviá-la no refresh evita duplicar o
-  // participante na sala (o anterior só sairia após o empty_timeout de 300s).
-  const [participantIdentity, setParticipantIdentity] = useState<string | null>(
-    null
-  );
-  // Necessária para renovar o token em salas trancadas, que exigem a senha.
-  const [joinPassword, setJoinPassword] = useState<string | undefined>(
-    undefined
-  );
-  const [joinConfig, setJoinConfig] = useState<{
-    audioEnabled: boolean;
-    videoEnabled: boolean;
-    audioDeviceId?: string;
-    videoDeviceId?: string;
-  }>({ audioEnabled: true, videoEnabled: true });
+  const [participantName, setParticipantName] = useState<string | null>(null);
+  const [participantIdentity, setParticipantIdentity] = useState<string | null>(null);
+  const [joinPassword, setJoinPassword] = useState<string | undefined>(undefined);
+  const [joinConfig, setJoinConfig] = useState<
+    Pick<
+      GreenRoomJoinConfig,
+      "audioEnabled" | "videoEnabled" | "audioDeviceId" | "videoDeviceId"
+    > | null
+  >(null);
+  const [joined, setJoined] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-    const fallbackRoomInfo = {
-      title: `Sala ${roomId}`,
-      isLocked: false,
-    };
 
-    // Check session profile
-    fetch("/api/auth/me", { signal: controller.signal })
+    // Sessão e sala em paralelo: uma não depende da outra, e esperar as duas em
+    // serie custaria uma ida ao servidor por pagina aberta.
+    const session = fetch("/api/auth/me", { cache: "no-store", signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`Falha ao carregar sessão (${res.status})`);
         return res.json();
       })
-      .then((data) => {
-        if (data.user) setUserProfile(data.user);
+      .then((data: { user?: { name?: string } | null }) => {
+        if (data.user) setUserName(data.user.name ?? null);
       })
-      .catch((err) => {
-        if (err?.name === "AbortError") return;
-        console.error("Erro ao carregar sessão:", err);
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        // Sem sessão não é erro: entrar sem conta é um caminho normal, e o apelido
+        // do lobby só volta preenchido quando existe.
+        console.error("Erro ao carregar sessão:", error);
       });
 
-    // Fetch room public info
-    fetch(`/api/rooms/${roomId}`, { signal: controller.signal })
+    const room = fetch(`/api/rooms/${roomId}`, { cache: "no-store", signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`Falha ao carregar sala (${res.status})`);
         return res.json();
       })
-      .then((data) => {
-        if (data.room) {
-          setRoomInfo({
-            title: data.room.title,
-            isLocked: data.room.isLocked,
-          });
-        } else {
-          setRoomInfo(fallbackRoomInfo);
-        }
+      .then((data: { room?: { title?: string; isLocked?: boolean } | null }) => {
+        setRoomInfo({
+          title: data.room?.title || `Sala ${roomId}`,
+          isLocked: Boolean(data.room?.isLocked),
+        });
       })
-      .catch((err) => {
-        if (err?.name === "AbortError") return;
-        console.error("Erro ao carregar sala:", err);
-        setRoomInfo(fallbackRoomInfo);
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        // Sala efêmera não está no banco, mas é válida: o endpoint responde 200
+        // com `exists: false`. O lobby só precisa de um título para mostrar.
+        console.error("Erro ao carregar sala:", error);
+        setRoomInfo({ title: `Sala ${roomId}`, isLocked: false });
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
 
+    void Promise.allSettled([session, room]);
     return () => controller.abort();
   }, [roomId]);
 
-  const handleJoin = async (config: {
-    nickname: string;
-    password?: string;
-    audioEnabled: boolean;
-    videoEnabled: boolean;
-    audioDeviceId?: string;
-    videoDeviceId?: string;
-  }): Promise<boolean> => {
-    setJoinError(null);
-    try {
-      const res = await fetch("/api/livekit/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          roomId,
-          nickname: config.nickname,
-          password: config.password,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        setJoinError(data.error || "Não foi possível conectar à sala.");
+  const handleJoin = useCallback(
+    async (config: GreenRoomJoinConfig) => {
+      setJoinError(null);
+      try {
+        const res = await fetch("/api/livekit/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            roomId,
+            nickname: config.nickname,
+            password: config.password,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setJoinError(data.error || "Não foi possível conectar à sala.");
+          return false;
+        }
+        setToken(data.token);
+        setServerUrl(data.livekitUrl);
+        setParticipantName(config.nickname);
+        setParticipantIdentity(data.participantIdentity || null);
+        setJoinPassword(config.password);
+        setJoinConfig({
+          audioEnabled: config.audioEnabled,
+          videoEnabled: config.videoEnabled,
+          audioDeviceId: config.audioDeviceId,
+          videoDeviceId: config.videoDeviceId,
+        });
+        setJoined(true);
+        return true;
+      } catch {
+        setJoinError("Erro de comunicação com o servidor de conferência.");
         return false;
       }
+    },
+    [roomId],
+  );
 
-      setToken(data.token);
-      setServerUrl(data.livekitUrl);
-      setParticipantName(config.nickname);
-      setParticipantIdentity(data.participantIdentity || null);
-      setJoinPassword(config.password);
-      setJoinConfig({
-        audioEnabled: config.audioEnabled,
-        videoEnabled: config.videoEnabled,
-        audioDeviceId: config.audioDeviceId,
-        videoDeviceId: config.videoDeviceId,
-      });
-      setJoined(true);
-      return true;
-    } catch {
-      setJoinError("Erro de comunicação com o servidor de conferência.");
-      return false;
-    }
-  };
-
-  // Renova o token de acesso periodicamente. O `ConferenceRoom` escreve o token
-  // novo no motor: sozinho a prop `token` não renova nada, porque `Room.connect`
-  // retorna cedo quando a sala já está conectada.
-  // Falha é silenciosa: o token de 6h ainda vale, não derrubamos a chamada.
+  // Reusa a MESMA identidade de participante ao renovar: um identificador novo
+  // faria o SFU tratar o_refresh como outra pessoa, e o sintoma é o
+  // participante aparecer duplicado logo depois de reconectar.
   const refreshToken = useCallback(async () => {
     if (!participantIdentity || !participantName) return;
     try {
@@ -173,7 +154,6 @@ export default function RoomPage({ params }: RoomPageProps) {
           roomId,
           nickname: participantName,
           participantIdentity,
-          // Salas trancadas exigem a senha a cada renovação.
           password: joinPassword,
         }),
       });
@@ -181,30 +161,27 @@ export default function RoomPage({ params }: RoomPageProps) {
       const data = await res.json();
       if (data.token) setToken(data.token);
     } catch {
-      // Silencioso: o token atual continua válido.
+      // Renovar é rotina: falhar aqui derruba a chamada em curso sem necessidade.
     }
   }, [roomId, participantIdentity, participantName, joinPassword]);
 
   useEffect(() => {
     if (!joined) return;
-    const interval = setInterval(() => {
+    const id = setInterval(() => {
       void refreshToken();
     }, TOKEN_REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
+    return () => clearInterval(id);
   }, [joined, refreshToken]);
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-10 w-10 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
-          <span className="text-sm text-gray-400">Preparando sala...</span>
-        </div>
+      <div className="mx-auto w-full max-w-[34rem] px-4 py-20 sm:px-6">
+        <p className="font-mono text-[0.8125rem] text-ink-3">Preparando sala...</p>
       </div>
     );
   }
 
-  if (joined && token && serverUrl) {
+  if (joined && token && serverUrl && joinConfig) {
     return (
       <ConferenceRoom
         token={token}
@@ -218,21 +195,20 @@ export default function RoomPage({ params }: RoomPageProps) {
   }
 
   return (
-    <div>
-      {joinError && (
-        <div className="container mx-auto px-4 pt-6 max-w-xl">
-          <div role="alert" className="flex items-center gap-2 rounded-xl bg-red-950/80 border border-red-500/40 p-4 text-xs font-semibold text-red-200">
-            <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
-            <span>{joinError}</span>
-          </div>
-        </div>
-      )}
+    <div className="mx-auto w-full max-w-[68rem] px-4 py-10 sm:px-6">
+      {joinError ? (
+        <Sheet className="mb-6 border-alert-line bg-alert-wash px-5 py-3.5">
+          <p role="alert" className="text-[0.875rem] text-alert">
+            {joinError}
+          </p>
+        </Sheet>
+      ) : null}
 
       <GreenRoom
         roomId={roomId}
         roomTitle={roomInfo?.title || `Sala ${roomId}`}
         isLocked={Boolean(roomInfo?.isLocked)}
-        initialNickname={userProfile?.name || ""}
+        initialNickname={userName || ""}
         onJoin={handleJoin}
       />
     </div>

@@ -67,7 +67,7 @@ fallback hardcoded é o que transforma erro de configuração em falha silencios
 | `LIVEKIT_API_KEY` | `.env` | **Tem que ser idêntica** ao par em `livekit.yaml` |
 | `LIVEKIT_API_SECRET` | `.env` | **Tem que ser idêntica** ao par em `livekit.yaml` |
 | `LIVEKIT_URL` | `.env` | URL do SFU vista pelo servidor |
-| `NEXT_PUBLIC_LIVEKIT_URL` | `.env` | URL do SFU vista pelo navegador (`wss://` em produção) |
+| `NEXT_PUBLIC_LIVEKIT_URL` | `.env` | URL do SFU vista pelo navegador. Só o `next dev` local a usa: no Docker o compose a sobrescreve com `wss://${DOMAIN}` |
 | `DOMAIN` | `.env` | Hostname do Caddy, do certificado e do TURN |
 
 > **A chave e o segredo do LiveKit precisam bater exatamente com o par em `livekit.yaml`.**
@@ -196,8 +196,26 @@ Acesse [http://localhost:3000](http://localhost:3000).
 ### 4. Verificação
 
 ```bash
-npm run check      # typecheck (tsc --noEmit) + lint (eslint)
+npm run check      # typecheck (tsc --noEmit) + lint (eslint) + testes (vitest)
 ```
+
+### 5. Testes
+
+```bash
+npm test           # uma passada
+npm run test:watch
+```
+
+Os testes cobrem as invariantes de segurança, nao o wiring: a claim `userId`
+obrigatória no token de sessão (sem ela o Prisma devolve **todas** as salas), o
+teto de **72 bytes** do bcrypt antes de qualquer chamada à KDF, o rate limit por
+escopo + IP, a estabilidade da identidade do participante e a rejeição de
+identidade pertencente a outro apelido.
+
+O `vitest.config.mts` injeta o `JWT_SECRET` de teste por `test.env` — os
+handlers leem `process.env` no import, e o `.env` local pode não existir em CI.
+Nenhum teste toca o banco real: o Prisma é a fronteira mockada, e o `bcrypt` é
+observado por spy justamente para afirmar o que **não** deve chegar à KDF.
 
 ---
 

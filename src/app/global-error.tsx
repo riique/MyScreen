@@ -1,17 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Home, RefreshCw } from "lucide-react";
+import { useEffect } from "react";
 
 /**
- * Erro global: roda fora do provider de erro raiz, então não pode depender de
- * nenhum módulo do app (contextos, hooks compartilhados, estilos do layout).
- * Só o React, o next/link e o lucide-react.
+ * Este arquivo SUBSTITUI o layout raiz, `<html>` e `<body>` inclusive. Por isso
+ * ele nao importa `globals.css`, os primitivos da folha nem o Navbar: o proprio
+ * reset de CSS pode ser o que quebrou. Os valores sao literais porque as
+ * variaveis de tema moram justamente no CSS que nao carregou.
  *
- * `Link` funciona aqui: o App Router ainda monta esta árvore dentro do contexto
- * de navegação. O que NÃO funciona é `useRouter`, porque ele depende do
- * contexto de error boundary que acabou de quebrar.
+ * `Link` em vez de `useRouter`: o hook depende do contexto de navegacao que
+ * acabou de quebrar.
  */
 export default function GlobalError({
   error,
@@ -20,65 +19,117 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const [devMessage, setDevMessage] = useState<string | null>(null);
-
-  // Em produção o Next.js sanitiza a mensagem do erro; só mostramos em dev.
   useEffect(() => {
-    if (process.env.NODE_ENV === "production") return;
-    try {
-      setDevMessage(error.message);
-    } catch {
-      setDevMessage(null);
-    }
+    console.error("Erro fatal na aplicação:", error);
   }, [error]);
 
   return (
-    <html lang="pt-BR" className="dark">
+    <html lang="pt-BR">
       <body
-        className="flex min-h-dvh items-center justify-center bg-[#090a0f] p-4 text-gray-100 antialiased"
-        style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}
+        style={{
+          margin: 0,
+          minHeight: "100dvh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "2rem 1rem",
+          backgroundColor: "#f2f2ef",
+          color: "#16171a",
+          fontFamily:
+            'var(--font-archivo), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+        }}
       >
-        <div className="flex w-full max-w-sm flex-col items-center gap-4 rounded-2xl border border-red-500/30 bg-[#0f111a] p-6 text-center shadow-2xl">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10 text-red-400">
-            <AlertTriangle className="h-6 w-6" aria-hidden="true" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-white">A aplicação encontrou um erro</h1>
-            <p className="mt-1 text-sm text-gray-400">
-              Algo quebrou fora do fluxo normal da sala. Você pode tentar novamente ou voltar ao
-              início.
-            </p>
-          </div>
+        <div
+          style={{
+            width: "100%",
+            maxWidth: "34rem",
+            border: "1px solid #d5d5ce",
+            backgroundColor: "#ffffff",
+            borderRadius: 3,
+            padding: "1.75rem",
+            boxShadow:
+              "0 1px 2px rgba(22,23,26,.06), 0 6px 16px -10px rgba(22,23,26,.18)",
+          }}
+        >
+          <h1
+            style={{
+              margin: 0,
+              fontSize: "1.375rem",
+              fontWeight: 600,
+              letterSpacing: "-0.02em",
+              lineHeight: 1.2,
+            }}
+          >
+            A aplicação encontrou um erro
+          </h1>
+          <p
+            style={{
+              margin: "0.5rem 0 0",
+              fontSize: "0.875rem",
+              lineHeight: 1.6,
+              color: "#4b4e55",
+              maxWidth: "52ch",
+            }}
+          >
+            Algo quebrou fora do fluxo normal da sala. Você pode tentar novamente ou voltar
+            ao início.
+          </p>
 
-          {devMessage && (
-            <p className="w-full break-words rounded-lg bg-black/40 p-3 text-left font-mono text-[11px] text-red-300">
-              {devMessage}
-            </p>
-          )}
-
-          <div className="flex w-full gap-3 pt-2">
+          <div
+            style={{
+              display: "flex",
+              gap: "0.5rem",
+              marginTop: "1.5rem",
+              flexWrap: "wrap",
+            }}
+          >
             <button
               type="button"
-              onClick={() => reset()}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 transition-colors hover:bg-indigo-500"
+              onClick={reset}
+              style={{
+                border: "1px solid #1b3a7d",
+                backgroundColor: "#1b3a7d",
+                color: "#ffffff",
+                borderRadius: 3,
+                padding: "0.5rem 1rem",
+                fontSize: "0.8125rem",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
             >
-              <RefreshCw className="h-4 w-4" aria-hidden="true" />
               Tentar novamente
             </button>
             <Link
               href="/"
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-white/10 bg-[#181b26] px-4 py-2.5 text-sm font-semibold text-gray-200 transition-colors hover:bg-[#222636]"
+              style={{
+                border: "1px solid #b9b9b0",
+                backgroundColor: "#ffffff",
+                color: "#16171a",
+                borderRadius: 3,
+                padding: "0.5rem 1rem",
+                fontSize: "0.8125rem",
+                fontWeight: 600,
+                textDecoration: "none",
+              }}
             >
-              <Home className="h-4 w-4" aria-hidden="true" />
               Voltar ao início
             </Link>
           </div>
 
-          {error.digest && (
-            <p className="font-mono text-[11px] text-gray-500">
+          {error.digest ? (
+            <p
+              style={{
+                marginTop: "1.25rem",
+                paddingTop: "1rem",
+                borderTop: "1px solid #d5d5ce",
+                fontFamily: "var(--font-spline-mono), ui-monospace, monospace",
+                fontSize: "0.75rem",
+                color: "#9a9ea6",
+              }}
+            >
               Código: {error.digest}
             </p>
-          )}
+          ) : null}
         </div>
       </body>
     </html>

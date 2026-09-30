@@ -40,3 +40,11 @@ Thumbs.db
 # Configuracao real do LiveKit: contem o par de chaves. O template versionado
 # e `livekit.yaml.example`; o `deploy.sh` gera o `livekit.yaml` a partir do .env.
 livekit.yaml
+
+# Impeccable: artefatos transitorios de design.
+# `.impeccable/surfaces/` e `config.json` ficam versionados de proposito — sao o
+# registro do mundo visual. Capturas, estado de build e mocks sao da sessao.
+.impeccable/review/
+.impeccable/build/
+.impeccable/mocks/
+.impeccable/config.local.json
