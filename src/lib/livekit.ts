@@ -5,14 +5,12 @@ export interface TokenOptions {
   roomName: string;
   participantIdentity: string;
   participantName: string;
-  isHost?: boolean;
 }
 
 export async function createLiveKitToken({
   roomName,
   participantIdentity,
   participantName,
-  isHost = false,
 }: TokenOptions): Promise<string> {
   const at = new AccessToken(env.livekitApiKey, env.livekitApiSecret, {
     identity: participantIdentity,
@@ -28,7 +26,6 @@ export async function createLiveKitToken({
     canPublish: true,
     canPublishData: true,
     canSubscribe: true,
-    roomAdmin: isHost,
   });
 
   return await at.toJwt();

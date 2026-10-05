@@ -19,7 +19,6 @@
     "@prisma/client": "^6.4.1",
     "bcryptjs": "^3.0.2",
     "clsx": "^2.1.1",
-    "jose": "^6.0.8",
     "livekit-client": "^2.9.2",
     "livekit-server-sdk": "^2.11.1",
     "lucide-react": "^1.16.0",

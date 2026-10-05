@@ -1,18 +1,11 @@
 /**
- * A banda da home promete ser a mesma régua do lobby. Isso só é verdade se as
- * escolhas chegarem: sem isto, mexer na banda seria demonstração e o produto
- * mentiria sobre si mesmo.
+ * A última escolha de captura (resolução, taxa, conteúdo, áudio), perguntada no
+ * diálogo de compartilhar tela. `localStorage` porque é preferência da pessoa
+ * nesta máquina, não da sala: quem compartilha código sempre em 1080p/Texto
+ * não deveria responder a mesma coisa toda vez.
  *
- * `sessionStorage` e o armazenamento certo — a preferência vale para a sessão
- * aberta e some quando a aba fecha. Um id de sala numa URL seria lido por
- * qualquer pessoa que pegasse o link, e a preferência não é da sala.
- *
- * Três verbos porque existem dois consumidores: o lobby LÊ para mostrar a régua
- * já posicionada, e a sala CONSOME para virar os ajustes vivos da faixa. Ler sem
- * consumir é o que permite os dois.
- *
- * O tipo mora AQUI, e não no componente, para não criar um ciclo: a régua, a
- * banda e este módulo precisam falar do mesmo CaptureSettings.
+ * O tipo mora AQUI, e não no componente, para a régua e a sala falarem do
+ * mesmo CaptureSettings sem ciclo de import.
  */
 const KEY = "myscreen:capture";
 
@@ -62,7 +55,7 @@ function parse(raw: string | null): CaptureSettings | null {
 
 export function readCapture(): CaptureSettings {
   try {
-    return parse(sessionStorage.getItem(KEY)) ?? DEFAULT_CAPTURE;
+    return parse(localStorage.getItem(KEY)) ?? DEFAULT_CAPTURE;
   } catch {
     return DEFAULT_CAPTURE;
   }
@@ -70,19 +63,8 @@ export function readCapture(): CaptureSettings {
 
 export function writeCapture(settings: CaptureSettings): void {
   try {
-    sessionStorage.setItem(KEY, JSON.stringify(settings));
+    localStorage.setItem(KEY, JSON.stringify(settings));
   } catch {
-    // Modo privado e quota negada não podem impedir alguém de entrar na sala.
-  }
-}
-
-/** Consome a preferência: a escolha vira ajuste vivo e para de ser rascunho. */
-export function consumeCapture(): CaptureSettings {
-  try {
-    const value = readCapture();
-    sessionStorage.removeItem(KEY);
-    return value;
-  } catch {
-    return DEFAULT_CAPTURE;
+    // Modo privado e quota negada não podem impedir alguém de compartilhar.
   }
 }

@@ -84,13 +84,11 @@ if [ ! -f .env ]; then
     fi
 
     # Gerar chaves aleatórias seguras
-    RAND_JWT=$(openssl rand -hex 32)
     RAND_KEY="myscreen_$(openssl rand -hex 6)"
     RAND_SECRET=$(openssl rand -hex 32)
 
     cat > .env <<EOF
 DATABASE_URL="file:/app/data/database.sqlite"
-JWT_SECRET="${RAND_JWT}"
 LIVEKIT_API_KEY="${RAND_KEY}"
 LIVEKIT_API_SECRET="${RAND_SECRET}"
 LIVEKIT_URL="http://livekit:7880"
@@ -122,12 +120,6 @@ set -a; source .env; set +a
 
 : "${LIVEKIT_API_KEY:?LIVEKIT_API_KEY ausente no .env}"
 : "${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET ausente no .env}"
-: "${JWT_SECRET:?JWT_SECRET ausente no .env}"
-
-if [ "${#JWT_SECRET}" -lt 32 ]; then
-    echo -e "${RED}JWT_SECRET tem menos de 32 caracteres. Gere um novo com: openssl rand -hex 32${NC}"
-    exit 1
-fi
 
 # O SQLite precisa cair no volume `app-data`. Um path relativo no `.env` e
 # resolvido contra /app/prisma/ e o banco desaparece a cada `up --build`.

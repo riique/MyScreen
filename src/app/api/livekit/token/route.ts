@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { comparePassword, exceedsBcryptLimit, getSessionUser } from "@/lib/auth";
+import { comparePassword, exceedsBcryptLimit } from "@/lib/auth";
 import { createLiveKitToken } from "@/lib/livekit";
 import { env } from "@/lib/env";
 import { enforceRateLimit } from "@/lib/rate-limit";
@@ -23,13 +23,12 @@ async function handleToken(req: Request): Promise<NextResponse> {
 
   const room = await prisma.room.findUnique({
     where: { id: roomId },
-    select: { id: true, passwordHash: true, isLocked: true, creatorId: true },
+    select: { id: true, passwordHash: true, isLocked: true },
   });
 
-  const session = await getSessionUser();
-  const isRoomCreator = Boolean(session && room && room.creatorId === session.userId);
-
-  if (room && room.isLocked && !isRoomCreator) {
+  // Sem contas não existe "dono" que pule a senha: sala trancada pede a
+  // senha de todo mundo, inclusive de quem a criou.
+  if (room && room.isLocked) {
     const password = typeof body.password === "string" ? body.password : "";
     if (!password) {
       return NextResponse.json(
@@ -88,7 +87,6 @@ async function handleToken(req: Request): Promise<NextResponse> {
     roomName: roomId,
     participantIdentity,
     participantName: nickname,
-    isHost: isRoomCreator,
   });
 
   return NextResponse.json({
@@ -96,7 +94,6 @@ async function handleToken(req: Request): Promise<NextResponse> {
     livekitUrl: env.publicLiveKitUrl,
     participantIdentity,
     participantName: nickname,
-    isHost: isRoomCreator,
   });
 }
 

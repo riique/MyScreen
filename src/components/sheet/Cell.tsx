@@ -30,14 +30,10 @@ export function Cell({
   const { previous, amended } = useAmendment(value);
 
   return (
-    <div className={cn("min-w-0 px-5 py-4 sm:px-6", className)}>
-      <div className="border-b border-rule pb-1.5">
-        <span className="font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3">
-          {label}
-        </span>
-      </div>
+    <div className={cn("min-w-0 px-5 py-5 sm:px-6", className)}>
+      <span className="label-col">{label}</span>
 
-      <div className="mt-2.5 min-h-[1.75rem]">
+      <div className="mt-2 min-h-[1.75rem]">
         {previous !== null && previous !== value ? (
           <span
             className="mr-2 font-mono text-[0.8125rem] leading-none text-ink-3 line-through decoration-ink-4"
@@ -49,7 +45,7 @@ export function Cell({
         <span
           className={cn(
             "font-mono leading-none [font-variant-numeric:tabular-nums]",
-            emphasis ? "text-[1.375rem] font-semibold text-signal" : "text-[1.0625rem] text-ink",
+            emphasis ? "text-[1.0625rem] font-medium text-signal" : "text-[1.0625rem] text-ink",
             amended && "amended",
           )}
         >

@@ -21,7 +21,6 @@
  */
 
 const MIN_LENGTHS: Record<string, number> = {
-  JWT_SECRET: 32,
   LIVEKIT_API_KEY: 8,
   LIVEKIT_API_SECRET: 32,
   LIVEKIT_URL: 8,
@@ -58,11 +57,6 @@ function memoized(key: string): string {
 }
 
 export const env = {
-  /** Chave HMAC de assinatura da sessao. */
-  get jwtSecret(): Uint8Array {
-    return new TextEncoder().encode(memoized("JWT_SECRET"));
-  },
-
   get livekitApiKey(): string {
     return memoized("LIVEKIT_API_KEY");
   },

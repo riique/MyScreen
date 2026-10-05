@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Archivo, Spline_Sans_Mono } from "next/font/google";
 import "./globals.css";
 import { Navbar } from "@/components/Navbar";
+import { themeBootScript } from "@/components/theme";
 
 /**
  * Duas faces, um trabalho cada. Archivo tem osso de grotesk impressa e Caps que
@@ -36,7 +37,15 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pt-BR" className={`${archivo.variable} ${splineMono.variable}`}>
+    <html
+      lang="pt-BR"
+      className={`${archivo.variable} ${splineMono.variable}`}
+      // O script de tema escreve `data-theme` antes da hidratação.
+      suppressHydrationWarning
+    >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+      </head>
       <body className="min-h-dvh bg-paper font-sans text-ink antialiased">
         <div className="flex min-h-dvh flex-col">
           <Navbar />

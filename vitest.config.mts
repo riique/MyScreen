@@ -13,7 +13,6 @@ export default defineConfig({
     // Os handlers leem `process.env` no import. O `.env` local pode nao existir
     // em CI, entao o segredo vem daqui, nunca de um arquivo.
     env: {
-      JWT_SECRET: "segredo-de-teste-com-tamanho-suficiente-para-o-hmac",
       LIVEKIT_API_KEY: "chavede-teste",
       LIVEKIT_API_SECRET: "segredode-teste-com-tamanho-suficiente-para-o-hmac",
       LIVEKIT_URL: "http://localhost:7880",

@@ -92,7 +92,7 @@ export function CaptureRuler({
         <Cell
           label="Conteúdo"
           value={settings.contentHint === "detail" ? "Telas e texto" : "Vídeo e jogos"}
-          className="border-r"
+          className="border-r border-rule"
         />
         <Cell
           label="Áudio"

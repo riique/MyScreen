@@ -2,8 +2,7 @@
 
 import { supportsAudioOutputSelection } from "livekit-client";
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { ChoiceRow, CheckCell, Field, inputClass } from "@/components/sheet";
+import { CheckCell, Field, inputClass } from "@/components/sheet";
 
 const TITLE_ID = "settings-modal-title";
 const DESCRIPTION_ID = "settings-modal-desc";
@@ -35,7 +34,6 @@ interface SettingsModalProps {
   settings: MediaSettings;
   onApply: (patch: Partial<MediaSettings>) => void;
   devices: DeviceSet;
-  isScreenSharing: boolean;
 }
 
 /**
@@ -55,7 +53,6 @@ export function SettingsModal({
   settings,
   onApply,
   devices,
-  isScreenSharing,
 }: SettingsModalProps) {
   const [mounted, setMounted] = useState(false);
   const [canSelectAudioOutput, setCanSelectAudioOutput] = useState(false);
@@ -134,7 +131,7 @@ export function SettingsModal({
   if (!open) return null;
 
   const content = (
-    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-[rgb(22_23_26/0.32)] sm:items-center sm:p-6">
+    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-scrim sm:items-center sm:p-6">
       <div
         ref={panelRef}
         role="dialog"
@@ -167,82 +164,6 @@ export function SettingsModal({
         </div>
 
         <div className="space-y-7 px-5 py-5 sm:px-6">
-          <fieldset disabled={isScreenSharing} className="min-w-0 disabled:opacity-55">
-            <legend className="border-b border-rule pb-2 text-[0.875rem] font-semibold text-ink">
-              Transmissão de tela (alta fidelidade)
-            </legend>
-            <p className="mt-2 text-[0.8125rem] leading-[1.5] text-ink-3">
-              {isScreenSharing
-                ? "Você está compartilhando sua tela agora. Estas opções só valem a partir do próximo compartilhamento."
-                : "Estas opções valem a partir do próximo compartilhamento de tela."}
-            </p>
-
-            <div className="mt-4 space-y-4">
-              <Field label="Taxa de quadros (FPS)" htmlFor="set-fps">
-                <select
-                  id="set-fps"
-                  value={settings.screenFps}
-                  onChange={(e) => onApply({ screenFps: Number(e.target.value) })}
-                  className={inputClass}
-                >
-                  <option value={60}>60 FPS (Ultra Fluído - Jogos &amp; Vídeos)</option>
-                  <option value={30}>30 FPS (Padrão Recomendado)</option>
-                  <option value={15}>15 FPS (Economia de Banda)</option>
-                </select>
-              </Field>
-
-              <Field label="Resolução de tela" htmlFor="set-res">
-                <select
-                  id="set-res"
-                  value={settings.screenResolution}
-                  onChange={(e) =>
-                    onApply({
-                      screenResolution: e.target.value as MediaSettings["screenResolution"],
-                    })
-                  }
-                  className={inputClass}
-                >
-                  <option value="1080p">1080p Full HD</option>
-                  <option value="720p">720p HD</option>
-                  <option value="4k">4K Ultra HD (se suportado)</option>
-                </select>
-              </Field>
-
-              <div>
-                <p className="border-b border-rule pb-1.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3">
-                  Tipo de conteúdo da tela
-                </p>
-                <div className="mt-2">
-                  <ChoiceRow
-                    name="set-content"
-                    ariaLabel="Tipo de conteúdo da tela"
-                    value={settings.screenContentType}
-                    onChange={(v) =>
-                      onApply({ screenContentType: v as MediaSettings["screenContentType"] })
-                    }
-                    options={[
-                      { value: "detail", label: "Texto", hint: "código, planilhas, UI" },
-                      { value: "motion", label: "Vídeo", hint: "jogos, animação" },
-                    ]}
-                  />
-                </div>
-                <p className="mt-2 max-w-[62ch] text-[0.8125rem] leading-[1.5] text-ink-3">
-                  Telas e texto (código, planilhas, UI) — mais nítido. Vídeo e jogos — mais
-                  fluido. Conteúdo estático gasta o orçamento de bitrate com quadro a quadro;
-                  escolher a opção errada deixa o texto ilegível.
-                </p>
-              </div>
-
-              <CheckCell
-                name="set-system-audio"
-                checked={settings.systemAudio}
-                onChange={(v) => onApply({ systemAudio: v })}
-                label="Capturar áudio do sistema"
-                note="O som do vídeo, do jogo ou da apresentação viaja junto com a sua voz. No Windows em modo exclusivo, o navegador não entrega essa faixa."
-              />
-            </div>
-          </fieldset>
-
           <div>
             <h3 className="border-b border-rule pb-2 text-[0.875rem] font-semibold text-ink">
               Aprimoramentos de microfone
@@ -314,7 +235,9 @@ export function SettingsModal({
   );
 
   if (!mounted || typeof document === "undefined") return content;
-  return createPortal(content, document.body);
+  // Sem portal: a sala pode estar em tela cheia, e tudo que sai do elemento
+  // em tela cheia (como um filho do <body>) fica invisível.
+  return content;
 }
 
 /**

@@ -33,7 +33,7 @@ const TONE: Record<NonNullable<ActionProps["tone"]>, string> = {
 };
 
 const BASE =
-  "inline-flex items-center justify-center gap-2 border px-4 py-2 text-[0.8125rem] font-semibold tracking-[-0.005em] transition-colors duration-150 [border-radius:var(--radius-sheet)] disabled:pointer-events-none disabled:opacity-40";
+  "inline-flex items-center justify-center gap-2 border px-4 py-2.5 text-[0.8125rem] font-semibold tracking-[-0.005em] transition-colors duration-150 [border-radius:var(--radius-sheet)] disabled:pointer-events-none disabled:opacity-40";
 
 export function Action({ children, className, tone = "secondary", ...rest }: ActionProps) {
   return (
@@ -89,7 +89,7 @@ export function Field({
     <div className={cn("min-w-0", className)}>
       <label
         htmlFor={htmlFor}
-        className="block border-b border-rule pb-1.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3"
+        className="label-col block"
       >
         {label}
       </label>
@@ -106,7 +106,7 @@ export function Field({
 }
 
 export const inputClass =
-  "w-full border border-rule-2 bg-sheet px-3 py-2 text-[0.875rem] text-ink transition-colors placeholder:text-ink-3 hover:border-rule-3 focus:border-signal focus:outline-none focus-visible:outline-none [border-radius:var(--radius-cell)]";
+  "w-full border border-rule-2 bg-sheet px-3.5 py-2.5 text-[0.875rem] text-ink transition-colors placeholder:text-ink-3 hover:border-rule-3 focus:border-signal focus:shadow-[0_0_0_3px_var(--color-signal-wash)] focus:outline-none focus-visible:outline-none [border-radius:var(--radius-cell)]";
 
 /* ---------------------------------------------------------------------------
    Linhas de escolha

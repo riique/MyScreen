@@ -3,13 +3,6 @@
 import { ArrowRight, Mic, MicOff, Video, VideoOff, Volume2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Field, Sheet, SheetHead, Stamp, inputClass } from "@/components/sheet";
-import { CaptureRuler } from "@/components/site/CaptureRuler";
-import {
-  DEFAULT_CAPTURE,
-  readCapture,
-  writeCapture,
-  type CaptureSettings,
-} from "@/components/site/capturePrefs";
 
 /** O VU empurra estado para o React a 10 Hz; 60 Hz de re-render é caro e invisível. */
 const METER_THROTTLE_MS = 100;
@@ -62,7 +55,6 @@ export function GreenRoom({
   const [permissionErrorMessage, setPermissionErrorMessage] = useState<string | null>(null);
 
   // A régua chega da home já posicionada: mexer aqui é mexer na mesma fila.
-  const [capture, setCapture] = useState<CaptureSettings>(DEFAULT_CAPTURE);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -87,10 +79,6 @@ export function GreenRoom({
   // estado é a promessa central deste produto, não um detalhe de ícone.
   const micLive = audioEnabled && !hasPermissionError;
   const camLive = videoEnabled && !hasPermissionError;
-
-  useEffect(() => {
-    setCapture(readCapture());
-  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -298,14 +286,6 @@ export function GreenRoom({
     if (!entered) setJoining(false);
   }
 
-  function patchCapture(next: Partial<CaptureSettings>) {
-    setCapture((prev: CaptureSettings) => {
-      const merged = { ...prev, ...next };
-      writeCapture(merged);
-      return merged;
-    });
-  }
-
   return (
     <Sheet>
       <div className="grid lg:grid-cols-[minmax(0,1fr)_23rem]">
@@ -327,7 +307,7 @@ export function GreenRoom({
               acessível a 10 Hz, e o estado também é escrito por extenso. */}
           <div className="mt-4">
             <div className="flex items-baseline justify-between">
-              <span className="border-b border-rule pb-1 font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3">
+              <span className="label-col">
                 Nível do microfone
               </span>
               <span className="font-mono text-[0.75rem] text-ink-3">
@@ -502,17 +482,6 @@ export function GreenRoom({
         </form>
       </div>
 
-      {/* A mesma régua da home: componente único, com a mesma emenda e a
-          mesma consequência. Aqui ela é a folha inteira, sem CTA. */}
-      <div className="border-t border-rule bg-band">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 px-5 pt-4 sm:px-6">
-          <h2 className="text-[0.875rem] font-semibold text-ink">Parâmetros de captura</h2>
-          <p className="text-[0.75rem] text-ink-3">Aplicados ao compartilhar a tela.</p>
-        </div>
-        <div className="mt-3">
-          <CaptureRuler settings={capture} onChange={patchCapture} />
-        </div>
-      </div>
     </Sheet>
   );
 }

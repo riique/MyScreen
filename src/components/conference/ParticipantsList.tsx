@@ -24,8 +24,13 @@ export function ParticipantsList({ isOpen, onClose }: ParticipantsListProps) {
   const room = useRoomContext();
   const remoteParticipants = useParticipants();
 
+  // `useParticipants` já inclui o participante local; somar de novo duplicava
+  // a linha "(Você)". O local vai primeiro, os outros na ordem de chegada.
   const participants = useMemo(
-    () => [room.localParticipant, ...remoteParticipants],
+    () => [
+      room.localParticipant,
+      ...remoteParticipants.filter((p) => p.identity !== room.localParticipant.identity),
+    ],
     [room.localParticipant, remoteParticipants],
   );
 
@@ -37,7 +42,7 @@ export function ParticipantsList({ isOpen, onClose }: ParticipantsListProps) {
   };
 
   return (
-    <aside className="flex h-full w-full shrink-0 flex-col border-l border-rule bg-sheet lg:w-[20rem]">
+    <aside className="flex h-full w-full min-h-0 flex-col bg-sheet">
       <div className="px-4 py-3">
         <SheetHead
           title="Participantes"

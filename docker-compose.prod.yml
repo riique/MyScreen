@@ -29,7 +29,7 @@
 #   - `migrate` -> mantido: e o que impede o app de atender 500 antes do schema.
 #
 # O nome do projeto (`myscreen`) e o volume (`myscreen_app-data`) NAO podem
-# mudar: e o que segura o SQLite de producao (contas, senhas e salas).
+# mudar: e o que segura o SQLite de producao (salas e senhas).
 # ==============================================================================
 
 services:

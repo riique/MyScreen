@@ -5,31 +5,57 @@ import {
   RoomAudioRenderer,
   isTrackReference,
   useConnectionState,
+  useIsMuted,
+  useIsSpeaking,
+  useParticipants,
   useRoomContext,
   useTracks,
   VideoTrack,
+  type TrackReferenceOrPlaceholder,
 } from "@livekit/components-react";
 import {
   ConnectionQuality,
   ConnectionState,
   DisconnectReason,
   LocalAudioTrack,
+  RemoteTrackPublication,
   RoomEvent,
   Track,
+  VideoPresets,
+  VideoQuality,
   supportsAudioOutputSelection,
   type Participant,
+  type ScreenShareCaptureOptions,
   type TrackPublishOptions,
 } from "livekit-client";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChatSidebar } from "./ChatSidebar";
 import { MediaControls } from "./MediaControls";
 import { ParticipantsList } from "./ParticipantsList";
 import { SettingsModal, type MediaSettings } from "./SettingsModal";
 import { TrackStatsDropdown } from "./TrackStatsDropdown";
-import { consumeCapture } from "@/components/site/capturePrefs";
-import { Stamp } from "@/components/sheet";
-import { ChevronLeft, LogOut, Maximize2, MessageSquare, Users } from "lucide-react";
+import {
+  readCapture,
+  writeCapture,
+  type CaptureSettings,
+} from "@/components/site/capturePrefs";
+import { ShareDialog } from "./ShareDialog";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { cn } from "@/lib/utils";
+import {
+  Activity,
+  Check,
+  Link2,
+  Maximize2,
+  MessageSquare,
+  MicOff,
+  MonitorUp,
+  Pin,
+  PinOff,
+  Users,
+  X,
+} from "lucide-react";
 
 /** Nomes de erro de mídia que valem uma explicação, e não um "erro desconhecido". */
 const MEDIA_ERROR_NAMES = new Set([
@@ -47,6 +73,22 @@ function getErrorName(error: unknown): string | undefined {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Orçamento de bits da tela por resolução, em 30 FPS. A qualidade é a promessa
+ * do produto: o encoder recebe banda para manter o quadro nítido, e 60 FPS ganha
+ * 50% a mais porque são o dobro de quadros disputando o mesmo orçamento.
+ */
+const SCREEN_BITRATE: Record<MediaSettings["screenResolution"], number> = {
+  "720p": 3_500_000,
+  "1080p": 6_000_000,
+  "4k": 14_000_000,
+};
+
+function screenBitrate(resolution: MediaSettings["screenResolution"], fps: number): number {
+  const factor = fps >= 60 ? 1.5 : fps <= 15 ? 0.6 : 1;
+  return Math.round(SCREEN_BITRATE[resolution] * factor);
 }
 
 const RESOLUTION: Record<MediaSettings["screenResolution"], { width: number; height: number }> = {
@@ -127,12 +169,23 @@ export function ConferenceRoom({
         onConnected={() => setFatalError(null)}
         onDisconnected={handleOnDisconnected}
         options={{
-          adaptiveStream: { pixelDensity: 1, pauseVideoInBackground: true },
+          // Sem adaptiveStream: ele pede ao SFU a camada do tamanho do <video>
+          // na tela, multiplicado pelo devicePixelRatio. Dar zoom, redimensionar
+          // a janela ou encolher o quadro na faixa lateral trocava a resolução
+          // recebida. Aqui a assinatura fica sempre na camada mais alta, e o
+          // navegador só escala a imagem na hora de desenhar.
+          adaptiveStream: false,
           dynacast: true,
           webAudioMix: true,
           stopLocalTrackOnUnpublish: true,
+          videoCaptureDefaults: { resolution: VideoPresets.h1080.resolution },
           publishDefaults: {
-            screenShareEncoding: { maxBitrate: 2_500_000, maxFramerate: 30, priority: "high" },
+            videoEncoding: { maxBitrate: 3_000_000, maxFramerate: 30, priority: "high" },
+            screenShareEncoding: {
+              maxBitrate: SCREEN_BITRATE["1080p"],
+              maxFramerate: 30,
+              priority: "high",
+            },
             degradationPreference: "maintain-resolution",
           },
         }}
@@ -151,17 +204,14 @@ export function ConferenceRoom({
       </LiveKitRoom>
 
       {fatalError ? (
-        <div
-          role="alert"
-          className="fixed inset-x-0 bottom-0 z-50 border-t border-rule bg-sheet px-4 py-3 sm:px-6"
-        >
-          <div className="mx-auto flex max-w-[80rem] flex-wrap items-center justify-between gap-3">
-            <p className="text-[0.875rem] text-alert">{fatalError}</p>
+        <div role="alert" className="fixed inset-x-0 bottom-24 z-[60] flex justify-center px-4">
+          <div className="flex w-full max-w-[34rem] flex-wrap items-center justify-between gap-3 border border-alert-line bg-sheet px-4 py-3 shadow-overlay [border-radius:var(--radius-sheet)]">
+            <p className="min-w-0 flex-1 text-[0.875rem] text-alert">{fatalError}</p>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => window.location.reload()}
-                className="border border-rule-2 bg-sheet px-3 py-1.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:bg-band [border-radius:var(--radius-sheet)]"
+                className="border border-rule-2 bg-sheet px-3 py-1.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:bg-band [border-radius:var(--radius-cell)]"
               >
                 Reconectar
               </button>
@@ -191,15 +241,14 @@ function ConferenceStage({
   onDismissMediaError: () => void;
   onLeave: () => void;
 }) {
-  const router = useRouter();
   const room = useRoomContext();
   const localParticipant = room.localParticipant;
   const connectionState = useConnectionState();
 
-  // A régua chega do lobby já posicionada: quem mexeu na banda da home entra
-  // com a mesma escolha, e a folha não repete a pergunta.
+  // Os ajustes de captura partem da última escolha feita no diálogo de
+  // compartilhar tela, e o diálogo os confirma a cada compartilhamento.
   const [settings, setSettings] = useState<MediaSettings>(() => {
-    const prefs = consumeCapture();
+    const prefs = readCapture();
     return {
       screenFps: Number(prefs.frameRate),
       screenResolution: prefs.resolution,
@@ -214,10 +263,11 @@ function ConferenceStage({
   // espelho síncrono, dois ajustes seguidos partiriam do mesmo estado velho.
   const settingsRef = useRef<MediaSettings>(settings);
 
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
+  const [panel, setPanel] = useState<Panel | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isStatsOpen, setIsStatsOpen] = useState(false);
+  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
+  const [controlError, setControlError] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string | null>(null);
   const [unstableConnection, setUnstableConnection] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [screenShareError, setScreenShareError] = useState<string | null>(null);
@@ -235,17 +285,17 @@ function ConferenceStage({
     { onlySubscribed: false },
   );
 
-  // `useTracks` devolve placeholders para câmera ainda não prevista. O
-  // `<VideoTrack>` e o painel de estatísticas só querem tracks de verdade, e
-  // passar o guard direto ao `filter` é o que estreita o tipo do elemento.
-  const subscribed = tracks.filter(isTrackReference);
-  const screenShareRefs = subscribed.filter((t) => t.source === Track.Source.ScreenShare);
-  const cameraRefs = subscribed.filter((t) => t.source === Track.Source.Camera);
+  // A câmera vem com placeholder: quem está com ela desligada continua tendo um
+  // quadro, com as iniciais, e a sala nunca "esconde" uma pessoa presente.
+  const screenShareRefs = tracks
+    .filter(isTrackReference)
+    .filter((t) => t.source === Track.Source.ScreenShare);
+  const cameraTiles = tracks.filter((t) => t.source === Track.Source.Camera);
+  const cameraRefs = cameraTiles.filter(isTrackReference);
 
   const isMicOn = localParticipant.isMicrophoneEnabled;
   const isCamOn = localParticipant.isCameraEnabled;
   const isScreenSharing = localParticipant.isScreenShareEnabled;
-  const hasActiveScreenShare = screenShareRefs.length > 0;
 
   const loadDevices = useCallback(async () => {
     try {
@@ -284,17 +334,35 @@ function ConferenceStage({
     function onDevices() {
       void loadDevices();
     }
+    // Toda trilha de vídeo recebida fica presa na camada mais alta. Sem
+    // adaptiveStream é isto que decide o que o SFU manda, e nada aqui depende
+    // do tamanho do quadro na tela nem do zoom do navegador.
+    function pinHighQuality(publication: RemoteTrackPublication) {
+      if (publication.kind === Track.Kind.Video) publication.setVideoQuality(VideoQuality.HIGH);
+    }
+    function onSubscribed(_track: unknown, publication: RemoteTrackPublication) {
+      pinHighQuality(publication);
+    }
+    for (const participant of room.remoteParticipants.values()) {
+      for (const publication of participant.trackPublications.values()) {
+        pinHighQuality(publication);
+      }
+    }
 
     room
       .on(RoomEvent.ConnectionQualityChanged, onQuality)
       .on(RoomEvent.AudioPlaybackStatusChanged, onAudioPlayback)
-      .on(RoomEvent.MediaDevicesChanged, onDevices);
+      .on(RoomEvent.MediaDevicesChanged, onDevices)
+      .on(RoomEvent.TrackSubscribed, onSubscribed)
+      .on(RoomEvent.TrackPublished, pinHighQuality);
 
     return () => {
       room
         .off(RoomEvent.ConnectionQualityChanged, onQuality)
         .off(RoomEvent.AudioPlaybackStatusChanged, onAudioPlayback)
-        .off(RoomEvent.MediaDevicesChanged, onDevices);
+        .off(RoomEvent.MediaDevicesChanged, onDevices)
+        .off(RoomEvent.TrackSubscribed, onSubscribed)
+        .off(RoomEvent.TrackPublished, pinHighQuality);
     };
   }, [room, loadDevices]);
 
@@ -324,9 +392,27 @@ function ConferenceStage({
     }
   }, [localParticipant, isCamOn]);
 
-  const toggleScreenShare = useCallback(async () => {
+  /**
+   * Sem `capture`, só desliga um compartilhamento ativo. Com `capture` (vindo
+   * do diálogo), grava a escolha e abre o seletor do navegador já com ela. A
+   * escolha entra no `settingsRef` antes do `getDisplayMedia`: esperar o
+   * `setState` assentar quebraria o gesto do usuário que o navegador exige.
+   */
+  const toggleScreenShare = useCallback(async (capture?: CaptureSettings) => {
+    if (capture) {
+      writeCapture(capture);
+      const next: MediaSettings = {
+        ...settingsRef.current,
+        screenFps: Number(capture.frameRate),
+        screenResolution: capture.resolution,
+        screenContentType: capture.contentHint,
+        systemAudio: capture.systemAudio,
+      };
+      settingsRef.current = next;
+      setSettings(next);
+    }
     const current = settingsRef.current;
-    if (isScreenSharing) {
+    if (isScreenSharing || !capture) {
       try {
         await localParticipant.setScreenShareEnabled(false);
       } catch (error) {
@@ -335,51 +421,83 @@ function ConferenceStage({
       return;
     }
 
-    const is4k = current.screenResolution === "4k";
     const { width, height } = RESOLUTION[current.screenResolution];
     const contentHint = current.screenContentType === "detail" ? "detail" : "motion";
     const publishOptions: TrackPublishOptions = {
       screenShareEncoding: {
-        maxBitrate: is4k ? 5_000_000 : 2_500_000,
+        maxBitrate: screenBitrate(current.screenResolution, current.screenFps),
         maxFramerate: current.screenFps,
         priority: "high",
       },
-      simulcast: is4k,
+      // Uma camada só: quem assiste recebe sempre a tela inteira, sem versão
+      // reduzida que o SFU pudesse escolher no lugar dela.
+      simulcast: false,
       degradationPreference: "maintain-resolution",
     };
 
+    const captureOptions: ScreenShareCaptureOptions = {
+      // Áudio do sistema CRU. Com `audio: true` o navegador pode ligar o
+      // processamento de voz na faixa capturada — e o cancelamento de eco trata
+      // o próprio som do PC como eco do alto-falante e o apaga. Música, vídeo e
+      // jogo não são voz: nada de AEC, supressão de ruído ou ganho automático.
+      audio: current.systemAudio
+        ? {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 2,
+          }
+        : false,
+      // Pede ao Chrome para oferecer a caixa "Compartilhar áudio do sistema"
+      // na tela inteira, e para não silenciar o som local durante a captura.
+      systemAudio: current.systemAudio ? "include" : "exclude",
+      suppressLocalAudioPlayback: false,
+      contentHint,
+      resolution: { width, height, frameRate: current.screenFps },
+    };
+
     try {
-      await localParticipant.setScreenShareEnabled(
-        true,
-        {
-          audio: current.systemAudio,
-          contentHint,
-          resolution: { width, height, frameRate: current.screenFps },
-        },
-        publishOptions,
-      );
+      await localParticipant.setScreenShareEnabled(true, captureOptions, publishOptions);
       setScreenShareError(null);
-    } catch (error) {
-      const message = getErrorMessage(error);
-      // O Windows em modo exclusivo recusa a faixa de áudio do sistema, mas a
-      // tela ainda pode ir. Perder a chamada inteira por causa do som seria
-      // cobrar caro demais por um recurso opcional.
+
+      // O navegador não dá erro quando entrega a tela sem som: só não inclui a
+      // faixa. Acontece quando a caixa de áudio fica desmarcada, quando se
+      // escolhe uma janela avulsa, ou no Firefox/Safari, que não capturam o
+      // áudio do sistema. A pessoa precisa saber disso agora, não pelo colega.
       if (
         current.systemAudio &&
-        (getErrorName(error) === "NotReadableError" || /audio/i.test(message))
+        !localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)
+      ) {
+        setScreenShareError(
+          "A tela foi compartilhada sem áudio. No seletor do navegador, escolha a tela inteira ou uma aba e marque “Compartilhar áudio do sistema” (ou “da aba”). Janelas avulsas não levam áudio, e o Firefox e o Safari não capturam o som do sistema.",
+        );
+      }
+    } catch (error) {
+      const name = getErrorName(error) ?? (error instanceof Error ? error.name : "Erro");
+      const message = getErrorMessage(error);
+      console.error("Erro ao compartilhar tela com áudio:", error);
+
+      // A pessoa fechou o seletor: não é falha, não abre outro seletor. O
+      // bloqueio do sistema operacional ("Permission denied by system") é
+      // outra coisa e segue para a mensagem.
+      if (name === "AbortError" || (name === "NotAllowedError" && !/system/i.test(message))) {
+        return;
+      }
+
+      // O navegador recusou a faixa de áudio, mas a tela ainda pode ir. Perder
+      // a transmissão inteira por causa do som seria caro demais.
+      if (
+        current.systemAudio &&
+        (name === "NotReadableError" || /audio/i.test(message))
       ) {
         try {
           await localParticipant.setScreenShareEnabled(
             true,
-            {
-              audio: false,
-              contentHint,
-              resolution: { width, height, frameRate: current.screenFps },
-            },
+            { ...captureOptions, audio: false, systemAudio: "exclude" },
             publishOptions,
           );
           setScreenShareError(
-            "Áudio do sistema não pôde ser capturado (modo exclusivo do Windows). Compartilhando apenas o vídeo...",
+            `O navegador recusou o áudio do sistema (${name}: ${message}). A tela está indo só com vídeo. No Windows, isso costuma ser outro programa usando a saída de som em modo exclusivo, ou um fone Bluetooth no modo viva-voz.`,
           );
           return;
         } catch (fallbackError) {
@@ -390,8 +508,7 @@ function ConferenceStage({
           return;
         }
       }
-      console.error("Erro ao compartilhar tela:", error);
-      setScreenShareError(`Não foi possível compartilhar a tela: ${message}`);
+      setScreenShareError(`Não foi possível compartilhar a tela (${name}): ${message}`);
     }
   }, [localParticipant, isScreenSharing]);
 
@@ -501,45 +618,172 @@ function ConferenceStage({
     onLeave();
   }, [room, onLeave]);
 
-  const toggleTileFullscreen = useCallback((element: HTMLElement | null) => {
+  /* --- Tela cheia ---------------------------------------------------------
+     Duas escalas: a chamada inteira (botão da doca, com os controles junto) e
+     um quadro só (botão no próprio quadro, ou duplo clique). */
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [fullscreenEl, setFullscreenEl] = useState<Element | null>(null);
+  const [canFullscreen, setCanFullscreen] = useState(false);
+
+  useEffect(() => {
+    setCanFullscreen(Boolean(document.fullscreenEnabled));
+    const onChange = () => setFullscreenEl(document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback((element: Element | null) => {
     if (!element) return;
-    if (document.fullscreenElement) {
+    if (document.fullscreenElement === element) {
       void document.exitFullscreen();
       return;
     }
-    void element.requestFullscreen();
+    void element.requestFullscreen().catch((error: unknown) => {
+      console.error("Tela cheia recusada:", error);
+    });
   }, []);
+
+  /** Um erro de microfone/câmera vira aviso na régua, nunca promessa rejeitada solta. */
+  const guard = useCallback(
+    (action: () => Promise<void>) => () => {
+      action().catch((error: unknown) => setControlError(getErrorMessage(error)));
+    },
+    [],
+  );
+
+  /* --- Composição do palco -----------------------------------------------
+     Um quadro em destaque quando há o que destacar: o fixado pela pessoa, ou
+     então a primeira tela compartilhada. Sem destaque, as câmeras dividem o
+     palco numa grade que se recalcula com o espaço. */
+  const allTiles: TrackReferenceOrPlaceholder[] = [...screenShareRefs, ...cameraTiles];
+  const pinnedTile = pinned ? allTiles.find((t) => tileKey(t) === pinned) : undefined;
+  const focus = pinnedTile ?? screenShareRefs[0];
+  const focusKey = focus ? tileKey(focus) : null;
+  const strip = focus ? allTiles.filter((t) => tileKey(t) !== focusKey) : [];
+
+  const togglePin = useCallback((key: string) => {
+    setPinned((current) => (current === key ? null : key));
+  }, []);
+
+  const participantCount = useParticipants().length;
+  // `room.name` só chega depois do join; o id da rota existe desde o primeiro quadro.
+  const params = useParams<{ id?: string }>();
+  const roomLabel = room.name || params?.id || "";
 
   const reconnecting =
     connectionState === ConnectionState.Reconnecting ||
     connectionState === ConnectionState.SignalReconnecting;
 
-  const statsTrack = screenShareRefs[0] ?? cameraRefs[0];
+  const statsTrack = (focus && isTrackReference(focus) ? focus : undefined) ?? screenShareRefs[0] ?? cameraRefs[0];
+
+  const notices = [
+    screenShareError
+      ? { key: "screen", text: screenShareError, dismiss: () => setScreenShareError(null) }
+      : null,
+    controlError
+      ? { key: "control", text: controlError, dismiss: () => setControlError(null) }
+      : null,
+    mediaError ? { key: "media", text: mediaError, dismiss: onDismissMediaError } : null,
+    unstableConnection
+      ? {
+          key: "net",
+          text: "Conexão instável: a qualidade da sua rede caiu.",
+          dismiss: () => setUnstableConnection(false),
+        }
+      : null,
+  ].filter((n): n is { key: string; text: string; dismiss: () => void } => n !== null);
+
+  const shareInitial = useMemo<CaptureSettings>(
+    () => ({
+      resolution: settings.screenResolution,
+      frameRate: String(settings.screenFps) as CaptureSettings["frameRate"],
+      contentHint: settings.screenContentType,
+      systemAudio: settings.systemAudio,
+    }),
+    [settings.screenResolution, settings.screenFps, settings.screenContentType, settings.systemAudio],
+  );
+  const closeShareDialog = useCallback(() => setIsShareDialogOpen(false), []);
+
+  const tileProps = {
+    pinnedKey: pinned,
+    fullscreenEl,
+    onTogglePin: togglePin,
+    onToggleFullscreen: toggleFullscreen,
+  };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-paper">
-      {/* Avisos: régua, não toast. */}
-      {(screenShareError || mediaError || unstableConnection || audioBlocked) && (
-        <div className="border-b border-rule bg-band">
-          {screenShareError ? (
-            <WarnRow text={screenShareError} onDismiss={() => setScreenShareError(null)} />
-          ) : null}
-          {mediaError ? (
-            <WarnRow
-              text={mediaError}
-              label="Dispensar aviso de mídia"
-              onDismiss={onDismissMediaError}
+    <div
+      ref={shellRef}
+      className="fixed inset-0 z-50 flex flex-col overscroll-none bg-paper text-ink"
+    >
+      {/* --- Barra superior --------------------------------------------- */}
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-rule bg-sheet/80 px-3 backdrop-blur-md sm:px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="hidden text-[0.9375rem] font-semibold tracking-[-0.02em] sm:inline">
+            My<span className="text-signal">Screen</span>
+          </span>
+          <span aria-hidden className="hidden h-4 w-px bg-rule-2 sm:block" />
+          <span className="flex min-w-0 items-center gap-2">
+            <span
+              aria-hidden
+              className={cn(
+                "size-2 shrink-0 rounded-full",
+                reconnecting ? "animate-pulse bg-warn-dot" : "bg-signal",
+              )}
             />
+            <span className="truncate font-mono text-[0.8125rem] text-ink-2">{roomLabel}</span>
+          </span>
+          {reconnecting ? (
+            <span className="hidden text-[0.75rem] text-warn sm:inline">
+              {connectionState === ConnectionState.SignalReconnecting
+                ? "Reconectando a sinalização..."
+                : "Reconectando..."}
+            </span>
           ) : null}
-          {unstableConnection ? (
-            <WarnRow
-              text="Conexão instável — a qualidade da sua rede caiu."
-              onDismiss={() => setUnstableConnection(false)}
-            />
-          ) : null}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1">
+          <CopyLinkButton />
+          <span aria-hidden className="mx-1 h-4 w-px bg-rule-2" />
+          <BarToggle
+            label="Pessoas"
+            open={panel === "people"}
+            onClick={() => setPanel((p) => (p === "people" ? null : "people"))}
+            badge={participantCount}
+          >
+            <Users size={17} strokeWidth={1.75} aria-hidden />
+          </BarToggle>
+          <BarToggle
+            label="Chat"
+            open={panel === "chat"}
+            onClick={() => setPanel((p) => (p === "chat" ? null : "chat"))}
+          >
+            <MessageSquare size={17} strokeWidth={1.75} aria-hidden />
+          </BarToggle>
+          <BarToggle
+            label="Estatísticas"
+            open={panel === "stats"}
+            onClick={() => setPanel((p) => (p === "stats" ? null : "stats"))}
+          >
+            <Activity size={17} strokeWidth={1.75} aria-hidden />
+          </BarToggle>
+          <span aria-hidden className="mx-1 hidden h-4 w-px bg-rule-2 sm:block" />
+          <span className="hidden sm:block">
+            <ThemeToggle />
+          </span>
+        </div>
+      </header>
+
+      {/* --- Avisos ------------------------------------------------------ */}
+      {notices.length > 0 || audioBlocked ? (
+        <div className="shrink-0 border-b border-rule bg-band">
+          {notices.map((n) => (
+            <Notice key={n.key} text={n.text} onDismiss={n.dismiss} />
+          ))}
           {audioBlocked ? (
-            <WarnRow
+            <Notice
               text="O navegador bloqueou a reprodução de áudio."
+              onDismiss={() => setAudioBlocked(false)}
               action={
                 <button
                   type="button"
@@ -549,173 +793,72 @@ function ConferenceStage({
                   Retomar áudio
                 </button>
               }
-              onDismiss={() => setAudioBlocked(false)}
             />
           ) : null}
         </div>
-      )}
-
-      {reconnecting ? (
-        <div className="border-b border-rule bg-signal-wash px-4 py-2 sm:px-6">
-          <p className="font-mono text-[0.75rem] text-signal">
-            {connectionState === ConnectionState.SignalReconnecting
-              ? "Reconectando a sinalização..."
-              : "Reconectando à reunião..."}
-          </p>
-        </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 sm:p-6">
-        <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
-          {/* O monitor. Escuro de propósito: é contra um fundo neutro que se
-              avalia o que está sendo mostrado. */}
-          <div className="flex min-h-[45vh] min-w-0 flex-1 flex-col gap-3">
-            <div className="flex items-center justify-between gap-3">
-              <Stamp state={hasActiveScreenShare ? "ativo" : "pendente"}>
-                {hasActiveScreenShare ? "Compartilhando tela" : "Tela"}
-              </Stamp>
-              {screenShareRefs[0] ? (
-                <button
-                  type="button"
-                  title="Tela cheia do compartilhamento"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleTileFullscreen(event.currentTarget.closest("[data-fullscreen-tile]"));
-                  }}
-                  className="border border-rule-2 bg-sheet px-2 py-1 text-ink transition-colors hover:bg-band [border-radius:var(--radius-cell)]"
-                >
-                  <Maximize2 size={14} strokeWidth={1.5} aria-hidden />
-                  <span className="sr-only">Tela cheia do compartilhamento</span>
-                </button>
+      {/* --- Palco + painel --------------------------------------------- */}
+      <div className="relative flex min-h-0 flex-1">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3 sm:p-4">
+          {focus ? (
+            <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
+              <div className="flex min-h-0 min-w-0 flex-1">
+                <Tile trackRef={focus} variant="stage" {...tileProps} />
+              </div>
+              {strip.length > 0 ? (
+                <div className="flex h-[7.5rem] shrink-0 gap-3 overflow-x-auto sm:h-[9rem] lg:h-auto lg:w-[15rem] lg:flex-col lg:overflow-x-visible lg:overflow-y-auto xl:w-[17rem]">
+                  {strip.map((t) => (
+                    <div
+                      key={tileKey(t)}
+                      className="aspect-video h-full shrink-0 lg:h-auto lg:w-full"
+                    >
+                      <Tile trackRef={t} variant="strip" {...tileProps} />
+                    </div>
+                  ))}
+                </div>
               ) : null}
             </div>
+          ) : cameraTiles.length > 0 ? (
+            <CameraGrid tiles={cameraTiles} tileProps={tileProps} />
+          ) : (
+            <EmptyStage onShare={() => setIsShareDialogOpen(true)} />
+          )}
+        </main>
 
-            <div
-              data-fullscreen-tile="true"
-              className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden border border-rule-2 bg-monitor"
-            >
-              {screenShareRefs.length > 0 ? (
-                screenShareRefs.map((trackRef) => (
-                  <VideoTrack
-                    key={`${trackRef.participant.identity}-${trackRef.source}`}
-                    trackRef={trackRef}
-                    className="h-full w-full object-contain"
-                  />
-                ))
-              ) : (
-                <p className="px-6 text-center text-[0.875rem] leading-[1.6] text-monitor-ink">
-                  {cameraRefs.length > 0
-                    ? "Ninguém está compartilhando a tela."
-                    : "Compartilhe sua tela para começar."}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* A coluna de comando: um botão marcado por função, com o estado
-              escrito embaixo. O estado nunca é só cor. */}
-          <div className="flex shrink-0 flex-col gap-3 lg:w-[17.5rem]">
-            <MediaControls
-              isMicOn={isMicOn}
-              isCamOn={isCamOn}
-              isScreenSharing={isScreenSharing}
-              onToggleMic={toggleMic}
-              onToggleCam={toggleCam}
-              onToggleScreenShare={toggleScreenShare}
-              onLeave={handleLeave}
-            />
-
-            <div className="grid grid-cols-3 gap-px border border-rule bg-rule lg:grid-cols-1 [border-radius:var(--radius-sheet)]">
-              <PanelToggle
-                open={isStatsOpen}
-                onClick={() => setIsStatsOpen((v) => !v)}
-                icon={<ActivityGlyph />}
-                label="Estatísticas"
-              />
-              <PanelToggle
-                open={isParticipantsOpen}
-                onClick={() => setIsParticipantsOpen((v) => !v)}
-                icon={<Users size={14} strokeWidth={1.5} aria-hidden />}
-                label="Pessoas"
-              />
-              <PanelToggle
-                open={isChatOpen}
-                onClick={() => setIsChatOpen((v) => !v)}
-                icon={<MessageSquare size={14} strokeWidth={1.5} aria-hidden />}
-                label="Chat"
-              />
-            </div>
-
-            {isStatsOpen ? (
-              <TrackStatsDropdown
-                trackRef={statsTrack}
-                open={isStatsOpen}
-                onClose={() => setIsStatsOpen(false)}
-              />
-            ) : null}
-          </div>
-        </div>
-
-        {/* As câmeras: fiadas pequenas abaixo do monitor, como contact sheets. */}
-        {cameraRefs.length > 0 ? (
-          <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            {cameraRefs.map((trackRef) => {
-              const p = trackRef.participant;
-              return (
-                <div
-                  key={`${p.identity}-cam`}
-                  data-fullscreen-tile="true"
-                  className="overflow-hidden border border-rule-2"
-                >
-                  <div className="aspect-video bg-monitor">
-                    <VideoTrack trackRef={trackRef} className="h-full w-full object-cover" />
-                  </div>
-                  <div className="flex items-center justify-between gap-2 border-t border-rule bg-sheet px-2.5 py-1.5">
-                    <span className="truncate text-[0.75rem] text-ink-2">
-                      {p.name || p.identity}
-                      {p.isLocal ? " (Você)" : ""}
-                    </span>
-                    <button
-                      type="button"
-                      title={`Tela cheia de ${p.name || p.identity}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleTileFullscreen(event.currentTarget.closest("[data-fullscreen-tile]"));
-                      }}
-                      className="shrink-0 text-ink-3 transition-colors hover:text-ink"
-                    >
-                      <Maximize2 size={13} strokeWidth={1.5} aria-hidden />
-                      <span className="sr-only">{`Tela de ${p.name || p.identity}`}</span>
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+        {panel ? (
+          <div className="absolute inset-0 z-10 flex min-h-0 flex-col border-l border-rule bg-sheet sm:static sm:w-[22rem] sm:shrink-0">
+            {panel === "chat" ? (
+              <ChatSidebar isOpen onClose={() => setPanel(null)} />
+            ) : panel === "people" ? (
+              <ParticipantsList isOpen onClose={() => setPanel(null)} />
+            ) : (
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <TrackStatsDropdown trackRef={statsTrack} open onClose={() => setPanel(null)} />
+              </div>
+            )}
           </div>
         ) : null}
       </div>
 
-      {/* A régua de saída: uma linha de células, largura toda, na margem. */}
-      <div className="border-t border-rule bg-sheet">
-        <div className="mx-auto flex max-w-[80rem] items-center justify-between gap-4 px-4 py-2.5 sm:px-6">
-          <button
-            type="button"
-            onClick={() => router.push("/")}
-            className="flex items-center gap-1.5 text-[0.8125rem] text-ink-2 transition-colors hover:text-ink"
-          >
-            <ChevronLeft size={14} strokeWidth={1.5} aria-hidden />
-            Início
-          </button>
-          <button
-            type="button"
-            onClick={handleLeave}
-            className="flex items-center gap-2 border border-rule-2 px-3 py-1.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:border-alert-line hover:bg-alert-wash hover:text-alert [border-radius:var(--radius-sheet)]"
-          >
-            <LogOut size={14} strokeWidth={1.5} aria-hidden />
-            Sair
-          </button>
-        </div>
-      </div>
+      {/* --- Doca -------------------------------------------------------- */}
+      <footer className="shrink-0 border-t border-rule bg-sheet/80 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-md">
+        <MediaControls
+          isMicOn={isMicOn}
+          isCamOn={isCamOn}
+          isScreenSharing={isScreenSharing}
+          isFullscreen={fullscreenEl === shellRef.current && fullscreenEl !== null}
+          canFullscreen={canFullscreen}
+          onToggleMic={guard(toggleMic)}
+          onToggleCam={guard(toggleCam)}
+          onToggleScreenShare={() =>
+            isScreenSharing ? void toggleScreenShare() : setIsShareDialogOpen(true)
+          }
+          onToggleFullscreen={() => toggleFullscreen(shellRef.current)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onLeave={handleLeave}
+        />
+      </footer>
 
       <SettingsModal
         open={isSettingsOpen}
@@ -723,83 +866,378 @@ function ConferenceStage({
         settings={settings}
         onApply={applyMediaSettings}
         devices={devices}
-        isScreenSharing={isScreenSharing}
       />
-      <ParticipantsList isOpen={isParticipantsOpen} onClose={() => setIsParticipantsOpen(false)} />
-      <ChatSidebar isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+
+      <ShareDialog
+        open={isShareDialogOpen}
+        initial={shareInitial}
+        onClose={closeShareDialog}
+        onConfirm={(capture) => {
+          setIsShareDialogOpen(false);
+          void toggleScreenShare(capture);
+        }}
+      />
     </div>
   );
 }
 
-function WarnRow({
-  text,
-  action,
-  onDismiss,
-  label = "Dispensar",
+type Panel = "chat" | "people" | "stats";
+
+function tileKey(t: TrackReferenceOrPlaceholder): string {
+  return `${t.participant.identity}:${t.source}`;
+}
+
+type TileShared = {
+  pinnedKey: string | null;
+  fullscreenEl: Element | null;
+  onTogglePin: (key: string) => void;
+  onToggleFullscreen: (element: Element | null) => void;
+};
+
+/* ---------------------------------------------------------------------------
+   Grade de câmeras
+
+   Mede o palco e escolhe o número de colunas que dá o MAIOR quadro 16:9
+   possível. Um, dois ou nove participantes: o palco é sempre preenchido, e
+   redimensionar a janela recalcula na hora.
+   ------------------------------------------------------------------------ */
+const GRID_GAP = 12;
+const ASPECT = 16 / 9;
+
+function CameraGrid({
+  tiles,
+  tileProps,
 }: {
-  text: string;
-  action?: React.ReactNode;
-  onDismiss: () => void;
-  label?: string;
+  tiles: TrackReferenceOrPlaceholder[];
+  tileProps: TileShared;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setBox({ w: width, h: height });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const n = tiles.length;
+  let best = { w: 0, h: 0 };
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const maxW = (box.w - GRID_GAP * (cols - 1)) / cols;
+    const maxH = (box.h - GRID_GAP * (rows - 1)) / rows;
+    const w = Math.max(0, Math.min(maxW, maxH * ASPECT));
+    if (w > best.w) best = { w, h: w / ASPECT };
+  }
+
   return (
     <div
-      role="status"
-      className="flex items-center gap-3 border-b border-rule px-4 py-2 last:border-b-0 sm:px-6"
+      ref={ref}
+      className="flex min-h-0 flex-1 flex-wrap content-center items-center justify-center"
+      style={{ gap: GRID_GAP }}
     >
-      <p className="min-w-0 flex-1 text-[0.8125rem] text-ink-2">{text}</p>
-      {action}
+      {box.w > 0
+        ? tiles.map((t) => (
+            <div
+              key={tileKey(t)}
+              className="transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+              style={{ width: Math.floor(best.w), height: Math.floor(best.h) }}
+            >
+              <Tile trackRef={t} variant="grid" {...tileProps} />
+            </div>
+          ))
+        : null}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Quadro
+
+   O vídeo fica sobre o fundo do monitor, escuro nos dois temas: é contra preto
+   que se avalia imagem. Tela compartilhada nunca é cortada (contain); câmera
+   preenche o quadro na grade e na faixa, e aparece inteira no destaque.
+   ------------------------------------------------------------------------ */
+function Tile({
+  trackRef,
+  variant,
+  pinnedKey,
+  fullscreenEl,
+  onTogglePin,
+  onToggleFullscreen,
+}: {
+  trackRef: TrackReferenceOrPlaceholder;
+  variant: "stage" | "grid" | "strip";
+} & TileShared) {
+  const ref = useRef<HTMLDivElement>(null);
+  const participant = trackRef.participant;
+  const key = tileKey(trackRef);
+  const isScreen = trackRef.source === Track.Source.ScreenShare;
+  const isPinned = pinnedKey === key;
+  const isFullscreen = fullscreenEl !== null && fullscreenEl === ref.current;
+
+  const speaking = useIsSpeaking(participant);
+  const micMuted = useIsMuted({
+    participant,
+    source: Track.Source.Microphone,
+    publication: participant.getTrackPublication(Track.Source.Microphone),
+  });
+  const videoMuted = useIsMuted(trackRef);
+  const hasVideo = isTrackReference(trackRef) && !videoMuted;
+
+  const name = participant.name || participant.identity || (participant.isLocal ? "Você" : "Participante");
+  const label = isScreen
+    ? participant.isLocal
+      ? "Sua tela"
+      : `Tela de ${name}`
+    : participant.isLocal && name !== "Você"
+      ? `${name} (você)`
+      : name;
+  const small = variant === "strip";
+
+  return (
+    <div
+      ref={ref}
+      onDoubleClick={() => onToggleFullscreen(ref.current)}
+      className={cn(
+        "group relative flex h-full w-full items-center justify-center overflow-hidden bg-monitor ring-1 ring-rule [border-radius:var(--radius-sheet)]",
+        "outline outline-2 -outline-offset-2 transition-[outline-color] duration-200",
+        speaking && !isScreen ? "outline-signal" : "outline-transparent",
+        isFullscreen && "[border-radius:0]",
+      )}
+    >
+      {hasVideo ? (
+        <VideoTrack
+          trackRef={trackRef}
+          className={cn(
+            "h-full w-full",
+            isScreen || variant === "stage" || isFullscreen ? "object-contain" : "object-cover",
+            participant.isLocal && !isScreen && "-scale-x-100",
+          )}
+        />
+      ) : (
+        <span
+          aria-hidden
+          className={cn(
+            "flex items-center justify-center rounded-full bg-white/10 font-semibold text-white/85",
+            small ? "size-10 text-[0.875rem]" : "size-16 text-[1.375rem] sm:size-20 sm:text-[1.75rem]",
+          )}
+        >
+          {initials(name)}
+        </span>
+      )}
+
+      {/* Identificação: sempre legível sobre qualquer imagem. */}
+      <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-[0.75rem] font-medium text-white backdrop-blur-sm">
+        {isScreen ? (
+          <MonitorUp size={12} strokeWidth={2} aria-hidden className="shrink-0" />
+        ) : micMuted ? (
+          <MicOff size={12} strokeWidth={2} aria-hidden className="shrink-0 text-[#ff9b8a]" />
+        ) : null}
+        <span className="truncate">{label}</span>
+        {!isScreen && micMuted ? <span className="sr-only">, microfone mudo</span> : null}
+      </div>
+
+      {/* Ações do quadro: aparecem no hover e no foco; no toque, sempre. */}
+      <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+        <TileAction
+          label={isPinned ? `Soltar ${label}` : `Fixar ${label} em destaque`}
+          onClick={() => onTogglePin(key)}
+        >
+          {isPinned ? (
+            <PinOff size={14} strokeWidth={1.75} aria-hidden />
+          ) : (
+            <Pin size={14} strokeWidth={1.75} aria-hidden />
+          )}
+        </TileAction>
+        <TileAction
+          label={isFullscreen ? "Sair da tela cheia" : `Tela cheia: ${label}`}
+          onClick={() => onToggleFullscreen(ref.current)}
+        >
+          <Maximize2 size={14} strokeWidth={1.75} aria-hidden />
+        </TileAction>
+      </div>
+    </div>
+  );
+}
+
+function TileAction({
+  children,
+  label,
+  onClick,
+}: {
+  children: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      onDoubleClick={(event) => event.stopPropagation()}
+      className="flex size-8 items-center justify-center rounded-md bg-black/55 text-white backdrop-blur-sm transition-colors hover:bg-black/75"
+    >
+      {children}
+    </button>
+  );
+}
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0][0] ?? "";
+  const last = parts.length > 1 ? (parts[parts.length - 1][0] ?? "") : "";
+  return (first + last).toUpperCase();
+}
+
+function EmptyStage({ onShare }: { onShare: () => void }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 border border-dashed border-rule-2 px-6 text-center [border-radius:var(--radius-sheet)]">
+      <div>
+        <p className="text-[1.0625rem] font-semibold tracking-[-0.01em] text-ink">
+          Ninguém está transmitindo ainda
+        </p>
+        <p className="mt-1.5 max-w-[40ch] text-[0.875rem] leading-[1.55] text-ink-2">
+          Compartilhe a tela, uma janela ou uma aba. O áudio do sistema vai junto se você
+          deixar marcado no seletor do navegador.
+        </p>
+      </div>
       <button
         type="button"
-        aria-label={label}
-        onClick={onDismiss}
-        className="shrink-0 border border-transparent px-1.5 py-0.5 text-[0.75rem] text-ink-3 transition-colors hover:text-ink"
+        onClick={onShare}
+        className="inline-flex items-center gap-2 border border-signal bg-signal px-5 py-2.5 text-[0.875rem] font-semibold text-on-signal transition-colors hover:border-signal-2 hover:bg-signal-2 [border-radius:var(--radius-sheet)]"
       >
-        Dispensar
+        <MonitorUp size={17} strokeWidth={1.75} aria-hidden />
+        Compartilhar tela
       </button>
     </div>
   );
 }
 
-function PanelToggle({
+function BarToggle({
+  children,
+  label,
   open,
   onClick,
-  icon,
-  label,
+  badge,
 }: {
+  children: React.ReactNode;
+  label: string;
   open: boolean;
   onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
+  badge?: number;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={open}
-      className={`flex items-center justify-center gap-1.5 px-2 py-2 text-[0.6875rem] transition-colors ${
-        open ? "bg-signal-wash text-signal" : "bg-sheet text-ink-2 hover:bg-band hover:text-ink"
-      }`}
+      aria-label={badge !== undefined ? `${label} (${badge})` : label}
+      title={label}
+      className={cn(
+        "flex h-9 items-center gap-1.5 border px-2.5 text-[0.8125rem] transition-colors [border-radius:var(--radius-cell)]",
+        open
+          ? "border-signal-line bg-signal-wash text-signal"
+          : "border-transparent text-ink-2 hover:border-rule hover:bg-band hover:text-ink",
+      )}
     >
-      {icon}
-      <span className="truncate">{label}</span>
+      {children}
+      {badge !== undefined ? (
+        <span className="font-mono text-[0.75rem] [font-variant-numeric:tabular-nums]">{badge}</span>
+      ) : null}
     </button>
   );
 }
 
-/** Glifo desenhado na mesma espessura das teclas de biblioteca. */
-function ActivityGlyph() {
+type CopyState = "idle" | "copied" | "error";
+
+function CopyLinkButton() {
+  const [state, setState] = useState<CopyState>("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  async function copy() {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("área de transferência indisponível");
+      await navigator.clipboard.writeText(window.location.href);
+      setState("copied");
+    } catch {
+      setState("error");
+    }
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setState("idle"), 2500);
+  }
+
   return (
-    <svg
-      viewBox="0 0 16 16"
-      className="size-[14px] shrink-0"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.5}
-      strokeLinecap="square"
-      aria-hidden
+    <>
+      <button
+        type="button"
+        onClick={copy}
+        title="Copiar link de convite"
+        className={cn(
+          "flex h-9 items-center gap-1.5 border px-2.5 text-[0.8125rem] font-medium transition-colors [border-radius:var(--radius-cell)]",
+          state === "copied"
+            ? "border-signal-line bg-signal-wash text-signal"
+            : state === "error"
+              ? "border-alert-line bg-alert-wash text-alert"
+              : "border-rule-2 bg-sheet text-ink hover:border-rule-3 hover:bg-band",
+        )}
+      >
+        {state === "copied" ? (
+          <Check size={16} strokeWidth={2} aria-hidden />
+        ) : (
+          <Link2 size={16} strokeWidth={1.75} aria-hidden />
+        )}
+        <span className="hidden sm:inline">
+          {state === "copied" ? "Copiado" : state === "error" ? "Falhou" : "Convidar"}
+        </span>
+      </button>
+      <span role="status" aria-live="polite" className="sr-only">
+        {state === "copied"
+          ? "Link de convite copiado."
+          : state === "error"
+            ? "Não foi possível copiar. Copie o endereço da página manualmente."
+            : ""}
+      </span>
+    </>
+  );
+}
+
+function Notice({
+  text,
+  action,
+  onDismiss,
+}: {
+  text: string;
+  action?: React.ReactNode;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      className="flex items-center gap-3 border-b border-rule px-4 py-2 last:border-b-0 sm:px-5"
     >
-      <path d="M1 11h2.5l2-6 2.5 9 2.5-12 2 9H15" />
-    </svg>
+      <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warn-dot" />
+      <p className="min-w-0 flex-1 text-[0.8125rem] text-ink-2">{text}</p>
+      {action}
+      <button
+        type="button"
+        aria-label="Dispensar aviso"
+        onClick={onDismiss}
+        className="shrink-0 p-1 text-ink-3 transition-colors hover:text-ink"
+      >
+        <X size={14} strokeWidth={1.75} aria-hidden />
+      </button>
+    </div>
   );
 }

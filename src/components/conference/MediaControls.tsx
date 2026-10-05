@@ -1,38 +1,40 @@
 "use client";
 
 import {
-  Check,
-  Copy,
+  Maximize,
   Mic,
   MicOff,
-  Monitor,
-  MonitorOff,
+  Minimize,
+  MonitorUp,
+  MonitorX,
   PhoneOff,
+  Settings2,
   Video,
   VideoOff,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { LocalRecorder } from "./LocalRecorder";
+import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
 
 /**
- * A régua de comando: um botão marcado por função, empilhado na coluna ao lado
- * do monitor. O estado de cada tecla é escrito embaixo do ícone — ligado é
- * preenchido e escrito "ligado", desligado é vazio e escrito "desligado". O
- * estado nunca depende só da cor, porque cor sozinha não sobrevive a quem não
- * distingue verde de vermelho.
+ * A doca da chamada: uma fila só, centrada, com o que a pessoa toca de olho no
+ * vídeo. Microfone e câmera desligados ficam marcados em vermelho de alerta —
+ * é o estado que mais causa "você está mudo" numa chamada, então ele precisa
+ * ser visto de relance. Compartilhar tela ligado ganha o azul cheio.
+ *
+ * O estado nunca é só cor: o ícone troca (mic riscado, câmera riscada) e o
+ * rótulo acessível diz o que o clique faz.
  */
-
-type CopyState = "idle" | "copied" | "error";
-
-const COPY_RESET_MS = 2500;
-
 export interface MediaControlsProps {
   isMicOn: boolean;
   isCamOn: boolean;
   isScreenSharing: boolean;
+  isFullscreen: boolean;
+  canFullscreen: boolean;
   onToggleMic: () => void;
   onToggleCam: () => void;
   onToggleScreenShare: () => void;
+  onToggleFullscreen: () => void;
+  onOpenSettings: () => void;
   onLeave: () => void;
 }
 
@@ -40,154 +42,113 @@ export function MediaControls({
   isMicOn,
   isCamOn,
   isScreenSharing,
+  isFullscreen,
+  canFullscreen,
   onToggleMic,
   onToggleCam,
   onToggleScreenShare,
+  onToggleFullscreen,
+  onOpenSettings,
   onLeave,
 }: MediaControlsProps) {
-  const [copyState, setCopyState] = useState<CopyState>("idle");
-  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(
-    () => () => {
-      clearTimeout(copyResetTimer.current);
-    },
-    [],
-  );
-
-  async function handleCopyLink() {
-    const url = window.location.href;
-    try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("área de transferência indisponível");
-      }
-      await navigator.clipboard.writeText(url);
-      setCopyState("copied");
-    } catch {
-      setCopyState("error");
-    }
-    clearTimeout(copyResetTimer.current);
-    copyResetTimer.current = setTimeout(() => setCopyState("idle"), COPY_RESET_MS);
-  }
-
-  const copyLabel =
-    copyState === "copied"
-      ? "Link de convite copiado"
-      : copyState === "error"
-        ? "Não foi possível copiar o link de convite. Copie o endereço da página manualmente."
-        : "Copiar link de convite da reunião";
-
   return (
-    <div>
-      <div className="grid grid-cols-3 gap-px border border-rule bg-rule lg:grid-cols-1 [border-radius:var(--radius-sheet)]">
-        <ControlCell
-          on={isMicOn}
-          onClick={onToggleMic}
-          pressedLabel="Silenciar microfone"
-          unpressedLabel="Ativar microfone"
-          onLabel="Microfone ligado"
-          offLabel="Microfone mudo"
-          icon={isMicOn ? <Mic size={15} strokeWidth={1.5} /> : <MicOff size={15} strokeWidth={1.5} />}
-        />
-        <ControlCell
-          on={isCamOn}
-          onClick={onToggleCam}
-          pressedLabel="Desligar câmera"
-          unpressedLabel="Ligar câmera"
-          onLabel="Câmera ligada"
-          offLabel="Câmera desligada"
-          icon={isCamOn ? <Video size={15} strokeWidth={1.5} /> : <VideoOff size={15} strokeWidth={1.5} />}
-        />
-        <ControlCell
-          on={isScreenSharing}
-          onClick={onToggleScreenShare}
-          pressedLabel="Parar Tela"
-          unpressedLabel="Compartilhar Tela"
-          onLabel="Compartilhando"
-          offLabel="Tela"
-          icon={
-            isScreenSharing ? (
-              <MonitorOff size={15} strokeWidth={1.5} />
-            ) : (
-              <Monitor size={15} strokeWidth={1.5} />
-            )
-          }
-        />
-      </div>
+    <div className="flex items-center justify-center gap-1.5 sm:gap-2.5">
+      <DockButton
+        tone={isMicOn ? "idle" : "off"}
+        onClick={onToggleMic}
+        pressed={isMicOn}
+        label={isMicOn ? "Silenciar microfone" : "Ativar microfone"}
+      >
+        {isMicOn ? <Mic {...ICON} /> : <MicOff {...ICON} />}
+      </DockButton>
 
-      {/* A gravação é local, por MediaRecorder, e o estado dela é dela. */}
-      <div className="mt-2">
-        <LocalRecorder />
-      </div>
+      <DockButton
+        tone={isCamOn ? "idle" : "off"}
+        onClick={onToggleCam}
+        pressed={isCamOn}
+        label={isCamOn ? "Desligar câmera" : "Ligar câmera"}
+      >
+        {isCamOn ? <Video {...ICON} /> : <VideoOff {...ICON} />}
+      </DockButton>
 
-      <div className="mt-2 grid grid-cols-2 gap-px border border-rule bg-rule [border-radius:var(--radius-sheet)]">
-        <button
-          type="button"
-          onClick={handleCopyLink}
-          aria-label={copyLabel}
-          className="flex flex-col items-center gap-1.5 bg-sheet px-2 py-2.5 text-[0.6875rem] leading-none text-ink-2 transition-colors hover:bg-band hover:text-ink"
+      <DockButton
+        tone={isScreenSharing ? "active" : "idle"}
+        onClick={onToggleScreenShare}
+        pressed={isScreenSharing}
+        label={isScreenSharing ? "Parar de compartilhar a tela" : "Compartilhar tela"}
+        wide
+      >
+        {isScreenSharing ? <MonitorX {...ICON} /> : <MonitorUp {...ICON} />}
+        <span className="hidden text-[0.8125rem] font-semibold sm:inline">
+          {isScreenSharing ? "Parar" : "Compartilhar"}
+        </span>
+      </DockButton>
+
+      <span aria-hidden className="mx-0.5 hidden h-6 w-px bg-rule-2 sm:block" />
+
+      {canFullscreen ? (
+        <DockButton
+          tone="idle"
+          onClick={onToggleFullscreen}
+          label={isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
         >
-          {copyState === "copied" ? (
-            <Check size={15} strokeWidth={1.5} aria-hidden className="text-signal" />
-          ) : copyState === "error" ? (
-            <Copy size={15} strokeWidth={1.5} aria-hidden />
-          ) : (
-            <Copy size={15} strokeWidth={1.5} aria-hidden />
-          )}
-          <span>{copyState === "copied" ? "Copiado" : "Copiar link"}</span>
-        </button>
+          {isFullscreen ? <Minimize {...ICON} /> : <Maximize {...ICON} />}
+        </DockButton>
+      ) : null}
 
-        <button
-          type="button"
-          onClick={onLeave}
-          className="flex flex-col items-center gap-1.5 bg-sheet px-2 py-2.5 text-[0.6875rem] leading-none text-ink-2 transition-colors hover:bg-alert-wash hover:text-alert"
-        >
-          <PhoneOff size={15} strokeWidth={1.5} aria-hidden />
-          <span>Sair</span>
-        </button>
-      </div>
+      <DockButton tone="idle" onClick={onOpenSettings} label="Configurações de mídia">
+        <Settings2 {...ICON} />
+      </DockButton>
 
-      <span role="status" aria-live="polite" className="sr-only">
-        {copyState === "copied"
-          ? "Link de convite copiado para a área de transferência."
-          : copyState === "error"
-            ? "Falha ao copiar o link de convite. Copie o endereço da página manualmente."
-            : ""}
-      </span>
+      <button
+        type="button"
+        onClick={onLeave}
+        aria-label="Sair da reunião"
+        title="Sair da reunião"
+        className="flex h-11 items-center gap-2 rounded-full bg-alert sm:ml-1 px-4 text-[0.8125rem] font-semibold text-sheet transition-[background-color,transform] hover:brightness-110 active:scale-[0.97] sm:px-5"
+      >
+        <PhoneOff {...ICON} />
+        <span className="hidden sm:inline">Sair</span>
+      </button>
     </div>
   );
 }
 
-function ControlCell({
-  on,
+const ICON = { size: 18, strokeWidth: 1.75, "aria-hidden": true } as const;
+
+function DockButton({
+  children,
+  tone,
   onClick,
-  icon,
-  onLabel,
-  offLabel,
-  pressedLabel,
-  unpressedLabel,
+  label,
+  pressed,
+  wide = false,
 }: {
-  on: boolean;
+  children: ReactNode;
+  tone: "idle" | "off" | "active";
   onClick: () => void;
-  icon: React.ReactNode;
-  onLabel: string;
-  offLabel: string;
-  pressedLabel: string;
-  unpressedLabel: string;
+  label: string;
+  pressed?: boolean;
+  wide?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-pressed={on}
-      aria-label={on ? pressedLabel : unpressedLabel}
-      title={on ? pressedLabel : unpressedLabel}
-      className={`flex flex-col items-center gap-1.5 px-2 py-3 text-[0.6875rem] leading-none transition-colors ${
-        on ? "bg-signal-wash text-signal" : "bg-sheet text-ink-2 hover:bg-band hover:text-ink"
-      }`}
+      aria-label={label}
+      aria-pressed={pressed}
+      title={label}
+      className={cn(
+        "flex h-11 items-center justify-center gap-2 rounded-full border transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.96]",
+        wide ? "min-w-11 px-3.5 sm:px-4" : "w-11",
+        tone === "idle" && "border-rule-2 bg-sheet text-ink hover:border-rule-3 hover:bg-band",
+        tone === "off" &&
+          "border-alert-line bg-alert-wash text-alert hover:border-alert-line-2 hover:bg-alert-wash-2",
+        tone === "active" &&
+          "border-signal bg-signal text-on-signal hover:border-signal-2 hover:bg-signal-2",
+      )}
     >
-      <span aria-hidden>{icon}</span>
-      <span>{on ? onLabel : offLabel}</span>
+      {children}
     </button>
   );
 }

@@ -24,7 +24,7 @@ do sistema e câmera concomitante. Existe para rodar num Ubuntu próprio (Docker
 LiveKit SFU + Next.js) sem depender de um serviço de terceiros.
 
 O que o produto faz possível: compartilhar tela, janela ou aba a 60/30/15 FPS em 720p/1080p/4K,
-com o som do sistema viajando junto do microfone, gravando localmente em um clique, com chat,
+com o som do sistema viajando junto do microfone, sem conta nem cadastro, com chat,
 lista de participantes e um painel de estatísticas honesto.
 
 Sucesso, na leitura do usuário: a outra pessoa vê a mesma coisa que ele vê, com texto legível e
@@ -49,8 +49,7 @@ máquina.
 - Servidor Ubuntu próprio, `sudo bash deploy.sh`, containers Caddy (TLS automático) + LiveKit
   SFU + Next.js, SQLite persistente em `/app/data`.
 - O usuário do produto **é** o operador do servidor: ele roda o deploy, gira o par de chaves
-  LiveKit entre `.env` e `livekit.yaml`, rotaciona `JWT_SECRET`. Rotacionar o segredo invalida
-  sessões abertas, e isso é comportamento desejado.
+  LiveKit entre `.env` e `livekit.yaml`. Não existem contas: quem tem o link entra.
 - O app não sobe em modo degradado: `src/lib/env.ts` valida tudo no boot e o processo morre se
   faltar variável. Não existe fallback hardcoded de segredo.
 - Reunião real, não demo: a pessoa entra, testa câmera e microfone no lobby, escolhe resolução,
@@ -65,15 +64,13 @@ Capabilities confirmadas em código e README:
 - Compartilhamento de tela + janela + aba, com câmera em Picture-in-Picture ou na grade.
 - Captura de áudio do sistema/aba, estéreo, junto do microfone.
 - Lobby pré-reunião: preview de vídeo, VU meter, seleção de microfone/câmera/saída.
-- Gravação local via `MediaRecorder` (WebM VP9/VP8 no Chrome/Firefox, MP4 H.264 no Safari; a
-  extensão acompanha o `mimeType` real).
 - Qualidade: 60/30/15 FPS em 720p/1080p/4K. Tipo de conteúdo: `detail` (nitidez) ou `motion`
   (fluidez).
 - Processamento de áudio: cancelamento de eco, supressão de ruído, AGC, aplicados na track viva.
-- Salas instantâneas com link, ou protegidas por senha (bcrypt custo 12). Histórico no dashboard.
+- Salas sem conta, com link, opcionalmente protegidas por senha (bcrypt custo 12).
 - Chat em tempo real, lista de participantes com estado de microfone/câmera e quem está falando.
 - Painel de estatísticas: quadros descartados, PLI/NACK/FIR, decoder, candidato ICE.
-- Autenticação JWT sem estado (`jose`), claim `userId` obrigatória; rate limit por escopo + IP.
+- Sem contas nem sessão; rate limit por escopo + IP na criação de sala e na emissão de token.
 
 Constraints que trabalho futuro precisa preservar:
 
@@ -84,13 +81,11 @@ Constraints que trabalho futuro precisa preservar:
   `validate`, `livekit`, `prisma`), `prisma/schema.prisma` e os testes de segurança que os
   cobrem. A integração com o SDK `livekit-client` é a única coisa que sobrevive da camada de
   mídia, porque é ela que faz a chamada funcionar.
-- Tema inicial: **branco**. Versão escura fica para depois, não para agora.
+- Tema padrão: **branco**, com tema escuro opcional pelo botão do topo (escolha salva no navegador).
 - UI e copy em português (pt-BR). Sem i18n nesta rodada.
 - Stack fixa: Next.js 15 App Router, React 19, TypeScript strict, Tailwind v4, lucide-react.
 - O `html` é `lang="pt-BR"` e o app usa `min-h-dvh` + `viewportFit: "cover"`; rodapé de
   viewport móvel é território de iOS Safari e precisa de cuidado explícito.
-- Autenticação e rate limit são porta de entrada: a tela de erro de login não pode vazar se a
-  conta existe.
 
 Open decisions (registradas, não inventadas):
 

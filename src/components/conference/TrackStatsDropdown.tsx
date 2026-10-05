@@ -280,7 +280,7 @@ export function TrackStatsDropdown({ trackRef, open, onClose }: TrackStatsDropdo
       className="border border-rule bg-sheet [border-radius:var(--radius-sheet)]"
     >
       <div className="flex items-center justify-between gap-2 border-b border-rule px-3 py-2">
-        <h3 className="font-mono text-[10.5px] font-medium uppercase tracking-[0.13em] text-ink-3">
+        <h3 className="label-col">
           Estatísticas do fluxo
         </h3>
         <button

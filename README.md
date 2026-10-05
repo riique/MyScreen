@@ -7,28 +7,25 @@
 ## 🚀 Principais Funcionalidades
 
 - **Transmissão Concomitante de Tela e Câmera**:
-  - Transmita sua tela inteira, janela ou aba do navegador ao mesmo tempo em que sua webcam permanece ativa em Picture-in-Picture (PiP) ou na grade de vídeo.
+  - Transmita sua tela inteira, janela ou aba do navegador ao mesmo tempo em que sua webcam permanece ativa, lado a lado com a tela em destaque.
 - **Áudio do Sistema / Aba em Alta Fidelidade**:
   - Captura direta do som do sistema ou da aba (vídeos do YouTube, jogos, músicas, apresentações) transmitido em estéreo junto com o microfone.
 - **Lobby Pré-Reunião (Green Room)**:
   - Teste de vídeo da câmera antes de entrar na sala.
   - Indicador de volume do microfone em tempo real (VU Meter via Web Audio API).
   - Seleção de dispositivos de entrada (microfone, câmera) e saída (alto-falantes).
-- **Gravação Local de Tela com Áudio (1 Clique)**:
-  - Grave a tela e o áudio da reunião diretamente no navegador via `MediaRecorder`, sem consumir processamento do servidor VPS.
-  - O contêiner negotiated é **WebM (VP9/VP8) no Chrome/Firefox** e **MP4 (H.264) no Safari** — a extensão do arquivo acompanha o `mimeType` real.
 - **Controles Avançados de Mídia**:
-  - Seletor de qualidade de tela: 60 FPS (Ultra Fluído para jogos/vídeos), 30 FPS ou 15 FPS; Resoluções 720p, 1080p Full HD e 4K.
+  - Perguntados na hora de compartilhar a tela: 60 FPS (Ultra Fluído para jogos/vídeos), 30 FPS ou 15 FPS; Resoluções 720p, 1080p Full HD e 4K.
   - **Tipo de conteúdo da tela**: "Telas e texto" (`contentHint: detail`, nitidez) ou "Vídeo e jogos" (`motion`, fluidez). Escolher a opção errada deixa o texto ilegível — o encoder gasta o orçamento de quadro a quadro pensando em temporal de algo que não se mexe.
   - Alternadores de áudio: Cancelamento de eco, Supressão de ruído de fundo e Ganho automático (AGC). Aplicados **imediatamente** na track viva, sem precisar mutar o microfone.
 - **Conexão remota confiável**:
   - **TURN embutido** (o próprio SFU, sem container coturn): quem está atrás de NAT simétrico, CGNAT (4G/5G) ou firewall corporativo tem caminho de relay.
   - Banner de reconexão cobre a queda do WebSocket de **sinalização** — o caso remoto mais comum.
-  - Seletor de tipo de conteúdo, `pixelDensity: 1` e `webAudioMix` para "vejo todos mas não ouço" no iOS.
-- **Salas Flexíveis & Segurança Híbrida**:
-  - Salas instantâneas com link compartilhável (estilo Google Meet).
-  - Salas protegidas por senha com hashing bcrypt (custo 12).
-  - Painel de usuário com histórico de salas criadas.
+  - Assinatura sempre na camada mais alta (sem `adaptiveStream`): a qualidade não muda com zoom nem com o tamanho do quadro.
+  - `webAudioMix` para "vejo todos mas não ouço" no iOS.
+- **Salas sem conta**:
+  - Qualquer pessoa cria uma sala e manda o link — não existe cadastro nem login.
+  - Senha opcional por sala, com hashing bcrypt (custo 12). Sala trancada pede a senha de todo mundo.
 - **Bate-papo em Tempo Real**:
   - Chat de texto integrado à chamada via canal de dados WebRTC do LiveKit.
 - **Lista de Participantes**:
@@ -46,7 +43,7 @@
 | **Media Server (SFU)** | LiveKit SFU (Go) via Docker Compose, com TURN embutido |
 | **WebRTC SDK** | `@livekit/components-react`, `livekit-client`, `livekit-server-sdk` |
 | **Banco de Dados** | SQLite + Prisma ORM (Volume persistente em `/app/data`) |
-| **Autenticação** | JWT sem estado assinado via `jose` + Senhas com `bcryptjs` (custo 12) |
+| **Senha de sala** | `bcryptjs` (custo 12), com teto de 72 bytes e limite de concorrência da KDF |
 | **Reverse Proxy & SSL** | Caddy Server com Let's Encrypt automático (HTTP/2, HTTP/3, WSS) |
 | **Orquestração** | Docker Compose + Script de Deploy automatizado para Ubuntu |
 
@@ -63,7 +60,6 @@ fallback hardcoded é o que transforma erro de configuração em falha silencios
 | Variável | Onde | Observação |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | `.env` | Dentro do Docker: `file:/app/data/database.sqlite` |
-| `JWT_SECRET` | `.env` | Mínimo 32 caracteres. `openssl rand -hex 32` |
 | `LIVEKIT_API_KEY` | `.env` | **Tem que ser idêntica** ao par em `livekit.yaml` |
 | `LIVEKIT_API_SECRET` | `.env` | **Tem que ser idêntica** ao par em `livekit.yaml` |
 | `LIVEKIT_URL` | `.env` | URL do SFU vista pelo servidor |
@@ -80,7 +76,7 @@ fallback hardcoded é o que transforma erro de configuração em falha silencios
 | Arquivo | Versionado | Por quê |
 | :--- | :--- | :--- |
 | `.env.example` | sim |só o formato, sem valores |
-| `.env` | **não** | segredo de sessão + credenciais do SFU |
+| `.env` | **não** | credenciais do SFU |
 | `livekit.yaml.example` | sim | configuração do SFU sem o par de chaves |
 | `livekit.yaml` | **não** | contém o par de chaves — o `deploy.sh` o gera |
 
@@ -96,8 +92,6 @@ cp livekit.yaml.example livekit.yaml
 
 **Para rotacionar segredos em um servidor já implantado:** edite o `.env` e rode
 `sudo bash deploy.sh` de novo. Ele reescreve o par em `livekit.yaml` e recria os containers.
-Rotacionar `JWT_SECRET` invalida as sessões abertas (todo mundo precisa logar de novo) — o que
-é o comportamento correto depois de um comprometimento.
 
 ---
 
@@ -206,13 +200,12 @@ npm test           # uma passada
 npm run test:watch
 ```
 
-Os testes cobrem as invariantes de segurança, nao o wiring: a claim `userId`
-obrigatória no token de sessão (sem ela o Prisma devolve **todas** as salas), o
+Os testes cobrem as invariantes de segurança, nao o wiring: o
 teto de **72 bytes** do bcrypt antes de qualquer chamada à KDF, o rate limit por
 escopo + IP, a estabilidade da identidade do participante e a rejeição de
 identidade pertencente a outro apelido.
 
-O `vitest.config.mts` injeta o `JWT_SECRET` de teste por `test.env` — os
+O `vitest.config.mts` injeta as variáveis de teste por `test.env` — os
 handlers leem `process.env` no import, e o `.env` local pode não existir em CI.
 Nenhum teste toca o banco real: o Prisma é a fronteira mockada, e o `bcrypt` é
 observado por spy justamente para afirmar o que **não** deve chegar à KDF.

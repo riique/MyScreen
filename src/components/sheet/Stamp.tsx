@@ -33,7 +33,7 @@ export function Stamp({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 border px-1.5 py-[3px] font-mono text-[10px] font-medium uppercase tracking-[0.12em] [border-radius:2px]",
+        "inline-flex items-center gap-1.5 rounded-full border px-2 py-[2px] font-mono text-[10px] font-medium uppercase tracking-[0.08em]",
         tone,
         className,
       )}

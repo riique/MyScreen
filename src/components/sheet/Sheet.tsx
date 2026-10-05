@@ -110,7 +110,7 @@ export function SheetHead({
     >
       <div className="flex min-w-0 items-baseline gap-3">
         {id ? (
-          <span className="font-mono text-[11px] tracking-[0.1em] text-ink-3">{id}</span>
+          <span className="font-mono text-[11px] text-ink-3">{id}</span>
         ) : null}
         <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">{title}</h2>
         {meta ? <span className="text-[13px] text-ink-3">{meta}</span> : null}
@@ -120,7 +120,13 @@ export function SheetHead({
   );
 }
 
-/** Titulo de pagina. Sem kicker: o peso e o tamanho carregam a hierarquia. */
+/**
+ * Titulo de pagina. Sem kicker: o peso e o tamanho carregam a hierarquia.
+ *
+ * A entrelinha vai como propriedade arbitraria de proposito: o tailwind-merge
+ * descarta `leading-*` quando quem chama passa outro `text-[...]`, e o titulo
+ * de duas linhas abria para 1.5.
+ */
 export function SheetTitle({
   children,
   className,
@@ -134,7 +140,7 @@ export function SheetTitle({
     <Tag
       className={cn(
         "font-semibold text-ink [text-wrap:balance]",
-        "text-[1.75rem] leading-[1.12] tracking-[-0.022em] sm:text-[2.125rem]",
+        "text-[1.875rem] tracking-[-0.028em] [line-height:1.1] sm:text-[2.375rem]",
         className,
       )}
     >

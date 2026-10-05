@@ -5,6 +5,8 @@ import { use, useCallback, useEffect, useState } from "react";
 import { Sheet } from "@/components/sheet";
 import { GreenRoom, type GreenRoomJoinConfig } from "@/components/conference/GreenRoom";
 
+const NICKNAME_KEY = "myscreen:nickname";
+
 interface RoomPageProps {
   params: Promise<{ id: string }>;
 }
@@ -59,24 +61,15 @@ export default function RoomPage({ params }: RoomPageProps) {
   useEffect(() => {
     const controller = new AbortController();
 
-    // Sessão e sala em paralelo: uma não depende da outra, e esperar as duas em
-    // serie custaria uma ida ao servidor por pagina aberta.
-    const session = fetch("/api/auth/me", { cache: "no-store", signal: controller.signal })
-      .then((res) => {
-        if (!res.ok) throw new Error(`Falha ao carregar sessão (${res.status})`);
-        return res.json();
-      })
-      .then((data: { user?: { name?: string } | null }) => {
-        if (data.user) setUserName(data.user.name ?? null);
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        // Sem sessão não é erro: entrar sem conta é um caminho normal, e o apelido
-        // do lobby só volta preenchido quando existe.
-        console.error("Erro ao carregar sessão:", error);
-      });
+    // Sem contas, o apelido é lembrado pelo próprio navegador: quem volta para
+    // outra sala não digita o nome de novo.
+    try {
+      setUserName(localStorage.getItem(NICKNAME_KEY));
+    } catch {
+      // Armazenamento bloqueado: o campo só começa vazio.
+    }
 
-    const room = fetch(`/api/rooms/${roomId}`, { cache: "no-store", signal: controller.signal })
+    void fetch(`/api/rooms/${roomId}`, { cache: "no-store", signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`Falha ao carregar sala (${res.status})`);
         return res.json();
@@ -98,7 +91,6 @@ export default function RoomPage({ params }: RoomPageProps) {
         if (!controller.signal.aborted) setLoading(false);
       });
 
-    void Promise.allSettled([session, room]);
     return () => controller.abort();
   }, [roomId]);
 
@@ -123,6 +115,11 @@ export default function RoomPage({ params }: RoomPageProps) {
         setToken(data.token);
         setServerUrl(data.livekitUrl);
         setParticipantName(config.nickname);
+        try {
+          localStorage.setItem(NICKNAME_KEY, config.nickname);
+        } catch {
+          // Lembrar o apelido é conveniência, não requisito.
+        }
         setParticipantIdentity(data.participantIdentity || null);
         setJoinPassword(config.password);
         setJoinConfig({

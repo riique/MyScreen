@@ -21,8 +21,8 @@ services:
     # O path do SQLite e declarado AQUI, e nao no `.env`: um `file:./...`
     # relativo e resolvido pelo Prisma contra o diretorio do schema
     # (`/app/prisma/`), que nao e o volume `app-data:/app/data` — o banco
-    # nasceria fora do volume e sumiria a cada `up --build`, levando contas,
-    # senhas e salas junto.
+    # nasceria fora do volume e sumiria a cada `up --build`, levando
+    # salas e senhas junto.
     environment:
       DATABASE_URL: "file:/app/data/database.sqlite"
     volumes:

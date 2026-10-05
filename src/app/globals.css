@@ -17,10 +17,10 @@
    ========================================================================== */
 @theme {
   /* --- Superfícies: mesa, folha, banda --- */
-  --color-paper: #f2f2ef; /* a mesa: o fundo da página */
+  --color-paper: #fafaf9; /* a mesa: o fundo da página */
   --color-sheet: #ffffff; /* a folha em cima da mesa */
-  --color-band: #f7f7f4; /* banda recuada dentro da folha */
-  --color-band-2: #ededea; /* banda pressionada / cabeçalho de tabela */
+  --color-band: #f8f8f7; /* banda recuada dentro da folha */
+  --color-band-2: #f1f1ef; /* banda pressionada / cabeçalho de tabela */
 
   /* --- Tinta ---
      ink-3 é o grafite: é o mais claro que ainda passa 4.5:1 tanto na folha
@@ -35,9 +35,9 @@
      A régua é load-bearing neste mundo: se o fio ficar frouxo a página vira
      uma planilha. rule é a linha de dentro, rule-2 a borda de bloco, rule-3 a
      moldura externa. */
-  --color-rule: #d5d5ce;
-  --color-rule-2: #b9b9b0;
-  --color-rule-3: #8a8a80;
+  --color-rule: #e7e7e4;
+  --color-rule-2: #d4d4cf;
+  --color-rule-3: #a9a9a2;
 
   /* --- Sinal: um só ---
      Azul de líder de broadcasting, impresso. Reservado para a ação primária e
@@ -74,21 +74,112 @@
   /* --- Papel dobrado ---
      Uma folha que levanta da mesa projeta um difusão curta e desviada. Offset
      e blur reais: sem isso é halo decorativo. */
-  --shadow-lift: 0 1px 2px rgb(22 23 26 / 0.06), 0 6px 16px -10px rgb(22 23 26 / 0.18);
-  --shadow-overlay: 0 2px 4px rgb(22 23 26 / 0.07), 0 24px 48px -18px rgb(22 23 26 / 0.28);
+  --shadow-lift: 0 1px 2px rgb(22 23 26 / 0.04), 0 12px 32px -18px rgb(22 23 26 / 0.16);
+  --shadow-overlay: 0 2px 6px rgb(22 23 26 / 0.06), 0 32px 64px -24px rgb(22 23 26 / 0.3);
+  --color-scrim: rgb(22 23 26 / 0.32);
 
   /* --- Tipografia --- */
   --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-spline-mono), ui-monospace, "SFMono-Regular", monospace;
 
-  --radius-sheet: 3px;
-  --radius-cell: 2px;
+  --radius-sheet: 10px;
+  --radius-cell: 8px;
 
   /* --- Ritmo ---
      Uma escala só em toda a página. Mais espaço acima de um título do que
      abaixo dele é regra de sala, não de token. */
   --spacing-band: 2.25rem;
   --spacing-cell: 0.5rem;
+}
+
+/* ============================================================================
+   Tema escuro
+
+   A mesma folha, impressa em negativo. A mesa é quase preta, a folha sobe um
+   passo de luminância em vez de projetar sombra (sombra não se lê no escuro),
+   e o azul de líder clareia para continuar 4.5:1+ sobre a folha. O botão
+   primário inverte: fundo claro, tinta escura — branco sobre azul médio não
+   passa contraste.
+
+   Os mesmos nomes de token: nenhum componente sabe em que tema está.
+   ========================================================================== */
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-paper: #0b0b0c;
+  --color-sheet: #131315;
+  --color-band: #18181a;
+  --color-band-2: #1f1f22;
+
+  --color-ink: #ededee; /* 15.9:1 na folha */
+  --color-ink-2: #b3b4b9; /* 8.9:1 */
+  --color-ink-3: #8a8c93; /* 5.4:1 */
+  --color-ink-4: #55575d;
+
+  --color-rule: #242427;
+  --color-rule-2: #333336;
+  --color-rule-3: #4a4a4f;
+
+  --color-signal: #a8bcf0; /* 10.1:1 na folha */
+  --color-signal-2: #c2d0f6;
+  --color-signal-wash: #19203a;
+  --color-signal-wash-2: #212a4a;
+  --color-signal-line: #34477e;
+  --color-on-signal: #0c1430;
+
+  --color-alert: #f0a294;
+  --color-alert-line: #5c2b23;
+  --color-alert-line-2: #844033;
+  --color-alert-wash: #24130f;
+  --color-alert-wash-2: #301913;
+  --color-warn: #e2b66b;
+
+  --color-monitor: #050506;
+  --color-monitor-ink: #8a8c93;
+
+  --shadow-lift: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 12px 32px -18px rgb(0 0 0 / 0.7);
+  --shadow-overlay: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 32px 64px -24px rgb(0 0 0 / 0.8);
+  --color-scrim: rgb(0 0 0 / 0.6);
+}
+
+/* A troca de tema é instantânea na carga e suave só quando a pessoa clica:
+   o script de tema liga esta classe por um instante. */
+:root.theme-switching *,
+:root.theme-switching *::before,
+:root.theme-switching *::after {
+  transition:
+    background-color 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    color 220ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+/* Tailwind v4 pinta borda sem cor em currentColor: um `border-r` esquecido
+   vira fio de tinta preta (ou branca, no escuro). O padrão é o fio da folha. */
+@layer base {
+  *,
+  ::before,
+  ::after,
+  ::backdrop {
+    border-color: var(--color-rule);
+  }
+}
+
+/* Rótulo de coluna: sans pequena, em grafite. Antes era mono em caixa alta com
+   tracking aberto — ruído demais repetido em cada campo. O valor é que é dado;
+   o rótulo só nomeia. */
+@layer components {
+  .label-col {
+    font-family: var(--font-sans);
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1.3;
+    letter-spacing: 0.002em;
+    color: var(--color-ink-3);
+  }
 }
 
 /* ============================================================================

@@ -59,7 +59,7 @@ export function ChatSidebar({ isOpen, onClose }: ChatSidebarProps) {
   }
 
   return (
-    <aside className="flex h-full w-full shrink-0 flex-col border-l border-rule bg-sheet lg:w-[22rem]">
+    <aside className="flex h-full w-full min-h-0 flex-col bg-sheet">
       <div className="flex items-center justify-between gap-3 border-b border-rule bg-band px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           <MessageSquare size={14} strokeWidth={1.5} aria-hidden className="shrink-0 text-ink-3" />
