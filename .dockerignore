@@ -18,3 +18,5 @@ docker-compose*.yml
 deploy.sh
 README.md
 tsconfig.tsbuildinfo
+
+companion

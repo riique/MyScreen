@@ -14,17 +14,21 @@ import {
   type TrackReferenceOrPlaceholder,
 } from "@livekit/components-react";
 import {
+  AudioPresets,
   ConnectionQuality,
   ConnectionState,
   DisconnectReason,
   LocalAudioTrack,
+  ParticipantEvent,
   RemoteTrackPublication,
   RoomEvent,
   Track,
   VideoPresets,
   VideoQuality,
   supportsAudioOutputSelection,
+  type LocalTrackPublication,
   type Participant,
+  type RemoteParticipant,
   type ScreenShareCaptureOptions,
   type TrackPublishOptions,
 } from "livekit-client";
@@ -41,6 +45,7 @@ import {
   type CaptureSettings,
 } from "@/components/site/capturePrefs";
 import { ShareDialog } from "./ShareDialog";
+import { openCompanionAudio, readCompanion, type CompanionAudio } from "./companionAudio";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import {
@@ -54,6 +59,9 @@ import {
   Pin,
   PinOff,
   Users,
+  Volume1,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 
@@ -318,6 +326,29 @@ function ConferenceStage({
     settingsRef.current = settings;
   }, [settings]);
 
+  // Áudio vindo do app MyScreen Áudio, enquanto a tela está no ar.
+  const companionRef = useRef<CompanionAudio | null>(null);
+  const stopCompanion = useCallback(() => {
+    if (!companionRef.current) return;
+    companionRef.current.close();
+    companionRef.current = null;
+    const audio = localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
+    if (audio?.track) void localParticipant.unpublishTrack(audio.track);
+  }, [localParticipant]);
+
+  // A tela pode parar pela barra do Chrome ("Parar compartilhamento"), sem
+  // passar pelo botão da sala: o áudio do app tem que parar junto.
+  useEffect(() => {
+    const onUnpublished = (pub: LocalTrackPublication) => {
+      if (pub.source === Track.Source.ScreenShare) stopCompanion();
+    };
+    localParticipant.on(ParticipantEvent.LocalTrackUnpublished, onUnpublished);
+    return () => {
+      localParticipant.off(ParticipantEvent.LocalTrackUnpublished, onUnpublished);
+      stopCompanion();
+    };
+  }, [localParticipant, stopCompanion]);
+
   // O token do LiveKit expira; sem trocar o token da engine, o SFU derruba a
   // sala na renewal seguinte mesmo com tudo saudável.
   useEffect(() => {
@@ -413,6 +444,7 @@ function ConferenceStage({
     }
     const current = settingsRef.current;
     if (isScreenSharing || !capture) {
+      stopCompanion();
       try {
         await localParticipant.setScreenShareEnabled(false);
       } catch (error) {
@@ -420,6 +452,11 @@ function ConferenceStage({
       }
       return;
     }
+
+    // Com o app, o som do PC vem dele: o navegador captura só a imagem.
+    const companion = current.systemAudio ? readCompanion() : null;
+    const viaApp = companion?.enabled === true;
+    const browserAudio = current.systemAudio && !viaApp;
 
     const { width, height } = RESOLUTION[current.screenResolution];
     const contentHint = current.screenContentType === "detail" ? "detail" : "motion";
@@ -432,7 +469,11 @@ function ConferenceStage({
       // Uma camada só: quem assiste recebe sempre a tela inteira, sem versão
       // reduzida que o SFU pudesse escolher no lugar dela.
       simulcast: false,
-      degradationPreference: "maintain-resolution",
+      // Quando a rede aperta, o encoder sacrifica uma coisa para salvar a
+      // outra. Texto precisa de nitidez (cai a taxa); vídeo e jogo precisam
+      // de fluidez (cai a resolução). É o que o "Conteúdo" da régua decide.
+      degradationPreference:
+        current.screenContentType === "detail" ? "maintain-resolution" : "maintain-framerate",
     };
 
     const captureOptions: ScreenShareCaptureOptions = {
@@ -440,17 +481,16 @@ function ConferenceStage({
       // processamento de voz na faixa capturada — e o cancelamento de eco trata
       // o próprio som do PC como eco do alto-falante e o apaga. Música, vídeo e
       // jogo não são voz: nada de AEC, supressão de ruído ou ganho automático.
-      audio: current.systemAudio
+      audio: browserAudio
         ? {
             echoCancellation: false,
             noiseSuppression: false,
             autoGainControl: false,
-            channelCount: 2,
           }
         : false,
       // Pede ao Chrome para oferecer a caixa "Compartilhar áudio do sistema"
       // na tela inteira, e para não silenciar o som local durante a captura.
-      systemAudio: current.systemAudio ? "include" : "exclude",
+      systemAudio: browserAudio ? "include" : "exclude",
       suppressLocalAudioPlayback: false,
       contentHint,
       resolution: { width, height, frameRate: current.screenFps },
@@ -460,12 +500,41 @@ function ConferenceStage({
       await localParticipant.setScreenShareEnabled(true, captureOptions, publishOptions);
       setScreenShareError(null);
 
+      if (viaApp && companion) {
+        try {
+          const audio = await openCompanionAudio(companion.code, () => {
+            companionRef.current = null;
+            const pub = localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
+            if (pub?.track) void localParticipant.unpublishTrack(pub.track);
+            setScreenShareError(
+              "O app MyScreen Áudio desconectou. A tela continua no ar, mas sem o som do PC.",
+            );
+          });
+          companionRef.current = audio;
+          await localParticipant.publishTrack(audio.track, {
+            source: Track.Source.ScreenShareAudio,
+            name: "screen_share_audio",
+            audioPreset: AudioPresets.musicHighQualityStereo,
+            forceStereo: true,
+            dtx: false,
+            red: false,
+          });
+        } catch (error) {
+          console.error("Erro ao conectar ao MyScreen Áudio:", error);
+          stopCompanion();
+          setScreenShareError(
+            "Não conectou ao app MyScreen Áudio. Confira se ele está aberto e se o código é o mesmo que aparece nele. A tela está no ar sem o som do PC.",
+          );
+        }
+        return;
+      }
+
       // O navegador não dá erro quando entrega a tela sem som: só não inclui a
       // faixa. Acontece quando a caixa de áudio fica desmarcada, quando se
       // escolhe uma janela avulsa, ou no Firefox/Safari, que não capturam o
       // áudio do sistema. A pessoa precisa saber disso agora, não pelo colega.
       if (
-        current.systemAudio &&
+        browserAudio &&
         !localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)
       ) {
         setScreenShareError(
@@ -487,7 +556,7 @@ function ConferenceStage({
       // O navegador recusou a faixa de áudio, mas a tela ainda pode ir. Perder
       // a transmissão inteira por causa do som seria caro demais.
       if (
-        current.systemAudio &&
+        browserAudio &&
         (name === "NotReadableError" || /audio/i.test(message))
       ) {
         try {
@@ -497,7 +566,7 @@ function ConferenceStage({
             publishOptions,
           );
           setScreenShareError(
-            `O navegador recusou o áudio do sistema (${name}: ${message}). A tela está indo só com vídeo. No Windows, isso costuma ser outro programa usando a saída de som em modo exclusivo, ou um fone Bluetooth no modo viva-voz.`,
+            `O navegador recusou o áudio do sistema (${name}: ${message}). A tela está indo só com vídeo. No Windows, isso costuma acontecer com fone em 7.1/surround. Para levar o som do PC mesmo assim, use o app MyScreen Áudio (opção no diálogo de compartilhar).`,
           );
           return;
         } catch (fallbackError) {
@@ -510,7 +579,7 @@ function ConferenceStage({
       }
       setScreenShareError(`Não foi possível compartilhar a tela (${name}): ${message}`);
     }
-  }, [localParticipant, isScreenSharing]);
+  }, [localParticipant, isScreenSharing, stopCompanion]);
 
   const resumeAudioPlayback = useCallback(async () => {
     try {
@@ -1045,6 +1114,9 @@ function Tile({
 
       {/* Ações do quadro: aparecem no hover e no foco; no toque, sempre. */}
       <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+        {isScreen && !participant.isLocal ? (
+          <ScreenVolume participant={participant as RemoteParticipant} />
+        ) : null}
         <TileAction
           label={isPinned ? `Soltar ${label}` : `Fixar ${label} em destaque`}
           onClick={() => onTogglePin(key)}
@@ -1062,6 +1134,75 @@ function Tile({
           <Maximize2 size={14} strokeWidth={1.75} aria-hidden />
         </TileAction>
       </div>
+    </div>
+  );
+}
+
+const SCREEN_VOLUME_KEY = "myscreen:screen-volume";
+
+function readScreenVolume(): number {
+  try {
+    const raw = localStorage.getItem(SCREEN_VOLUME_KEY);
+    const v = raw === null ? NaN : Number(raw);
+    return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * Volume do som da tela compartilhada, só para quem assiste. Não mexe na voz
+ * de ninguém: só na faixa de áudio da tela. A escolha vale para as próximas
+ * telas também (fica no navegador).
+ */
+function ScreenVolume({ participant }: { participant: RemoteParticipant }) {
+  const [volume, setVolume] = useState(readScreenVolume);
+  const lastAudible = useRef(volume > 0 ? volume : 1);
+
+  useEffect(() => {
+    participant.setVolume(volume, Track.Source.ScreenShareAudio);
+  }, [participant, volume]);
+
+  const apply = (v: number) => {
+    setVolume(v);
+    if (v > 0) lastAudible.current = v;
+    try {
+      localStorage.setItem(SCREEN_VOLUME_KEY, String(v));
+    } catch {
+      // Sem storage, o volume vale só para esta sessão.
+    }
+  };
+
+  const Icon = volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
+  const percent = Math.round(volume * 100);
+
+  return (
+    <div
+      className="flex items-center rounded-md bg-black/55 text-white backdrop-blur-sm"
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        aria-label={volume === 0 ? "Ativar som da tela" : "Silenciar som da tela"}
+        title={volume === 0 ? "Ativar som da tela" : "Silenciar som da tela"}
+        onClick={() => apply(volume === 0 ? lastAudible.current : 0)}
+        className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-black/40"
+      >
+        <Icon size={14} strokeWidth={1.75} aria-hidden />
+      </button>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        value={percent}
+        onChange={(event) => apply(Number(event.target.value) / 100)}
+        aria-label="Volume do som da tela"
+        aria-valuetext={`${percent}%`}
+        title={`Som da tela: ${percent}%`}
+        className="mr-2.5 h-1 w-20 cursor-pointer accent-white"
+      />
     </div>
   );
 }

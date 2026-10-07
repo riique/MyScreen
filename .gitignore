@@ -48,3 +48,7 @@ livekit.yaml
 .impeccable/build/
 .impeccable/mocks/
 .impeccable/config.local.json
+
+# App MyScreen Audio (Rust): binarios de build
+/companion/target/
+/companion/installer/target/
