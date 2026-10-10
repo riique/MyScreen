@@ -978,14 +978,14 @@ function ConferenceStage({
       {/* --- Palco + painel --------------------------------------------- */}
       <div className="relative flex min-h-0 flex-1">
         <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3 sm:p-4">
-          {focus ? (
+          {focusTiles.length > 1 ? (
+            // Divisão: só os quadros escolhidos, sem faixa lateral, cada um com
+            // a maior fatia possível do palco.
+            <SplitStage tiles={focusTiles} tileProps={tileProps} onExit={() => setPinned([])} />
+          ) : focus ? (
             <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
               <div className="flex min-h-0 min-w-0 flex-1">
-                {focusTiles.length > 1 ? (
-                  <CameraGrid tiles={focusTiles} variant="stage" tileProps={tileProps} />
-                ) : (
-                  <Tile trackRef={focus} variant="stage" {...tileProps} />
-                )}
+                <Tile trackRef={focus} variant="stage" {...tileProps} />
               </div>
               {strip.length > 0 ? (
                 <div className="flex h-[7.5rem] shrink-0 gap-3 overflow-x-auto sm:h-[9rem] lg:h-auto lg:w-[15rem] lg:flex-col lg:overflow-x-visible lg:overflow-y-auto xl:w-[17rem]">
@@ -1182,14 +1182,88 @@ type TileShared = {
 const GRID_GAP = 12;
 const ASPECT = 16 / 9;
 
-function CameraGrid({
+/* ---------------------------------------------------------------------------
+   Palco dividido
+
+   Os quadros fixados lado a lado repartem o palco inteiro em células iguais.
+   Diferente da grade de câmeras, a célula não é um 16:9 encolhido: ela ocupa
+   toda a fatia, e o vídeo (contain) cresce até onde o formato dele deixa. O
+   número de colunas é o que dá a maior imagem 16:9 visível em cada célula, então
+   num monitor largo duas telas ficam lado a lado, e num estreito, empilhadas.
+   ------------------------------------------------------------------------ */
+function SplitStage({
   tiles,
   tileProps,
-  variant = "grid",
+  onExit,
 }: {
   tiles: TrackReferenceOrPlaceholder[];
   tileProps: TileShared;
-  variant?: "stage" | "grid";
+  onExit: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setBox({ w: width, h: height });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const n = tiles.length;
+  let bestCols = 1;
+  let bestW = -1;
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const cellW = (box.w - GRID_GAP * (cols - 1)) / cols;
+    const cellH = (box.h - GRID_GAP * (rows - 1)) / rows;
+    const visible = Math.min(cellW, cellH * ASPECT);
+    if (visible > bestW) {
+      bestW = visible;
+      bestCols = cols;
+    }
+  }
+  const rows = Math.ceil(n / bestCols);
+
+  return (
+    <div className="group/split relative flex min-h-0 flex-1">
+      <div
+        ref={ref}
+        className="grid min-h-0 min-w-0 flex-1"
+        style={{
+          gap: GRID_GAP,
+          gridTemplateColumns: `repeat(${bestCols}, minmax(0, 1fr))`,
+          gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+        }}
+      >
+        {tiles.map((t) => (
+          <div key={tileKey(t)} className="flex min-h-0 min-w-0">
+            <Tile trackRef={t} variant="stage" {...tileProps} />
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={onExit}
+        className="absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-md bg-black/55 px-2.5 py-1.5 text-[0.75rem] font-medium text-white opacity-0 backdrop-blur-sm transition-opacity duration-150 group-hover/split:opacity-100 hover:bg-black/75 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+      >
+        <X size={13} strokeWidth={2} aria-hidden />
+        Desfazer divisão
+      </button>
+    </div>
+  );
+}
+
+function CameraGrid({
+  tiles,
+  tileProps,
+}: {
+  tiles: TrackReferenceOrPlaceholder[];
+  tileProps: TileShared;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -1228,7 +1302,7 @@ function CameraGrid({
               className="transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
               style={{ width: Math.floor(best.w), height: Math.floor(best.h) }}
             >
-              <Tile trackRef={t} variant={variant} {...tileProps} />
+              <Tile trackRef={t} variant="grid" {...tileProps} />
             </div>
           ))
         : null}
