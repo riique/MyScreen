@@ -1,6 +1,6 @@
 "use client";
 
-import { useChat } from "@livekit/components-react";
+import type { ReceivedChatMessage } from "@livekit/components-react";
 import { MessageSquare, Send, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -10,6 +10,12 @@ const SEND_ERROR_MESSAGE =
 interface ChatSidebarProps {
   isOpen: boolean;
   onClose: () => void;
+  chatMessages: ReceivedChatMessage[];
+  send: (message: string) => Promise<unknown>;
+  isSending: boolean;
+  /** O rascunho vive fora do painel: fechar o chat não apaga o que foi digitado. */
+  draft: string;
+  onDraftChange: React.Dispatch<React.SetStateAction<string>>;
 }
 
 /**
@@ -19,10 +25,20 @@ interface ChatSidebarProps {
  * que importa num registro técnico: quem mandou, quando, e em ordem. Aqui cada
  * mensagem é uma linha pautada com autor e hora em mono à esquerda — dá para
  * varrer a coluna e achar a linha que importa.
+ *
+ * O histórico (`useChat`) e o rascunho moram no palco, que fica montado a
+ * sala inteira. Se morassem aqui, fechar o painel desmontaria o hook e levaria
+ * junto as mensagens já recebidas e as que chegassem com ele fechado.
  */
-export function ChatSidebar({ isOpen, onClose }: ChatSidebarProps) {
-  const { chatMessages, send, isSending } = useChat();
-  const [draft, setDraft] = useState("");
+export function ChatSidebar({
+  isOpen,
+  onClose,
+  chatMessages,
+  send,
+  isSending,
+  draft,
+  onDraftChange: setDraft,
+}: ChatSidebarProps) {
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);

@@ -4,6 +4,7 @@ import {
   LiveKitRoom,
   RoomAudioRenderer,
   isTrackReference,
+  useChat,
   useConnectionState,
   useIsMuted,
   useIsSpeaking,
@@ -51,11 +52,16 @@ import { cn } from "@/lib/utils";
 import {
   Activity,
   Check,
+  ChevronDown,
+  ChevronUp,
+  Columns2,
+  ExternalLink,
   Link2,
   Maximize2,
   MessageSquare,
   MicOff,
   MonitorUp,
+  PictureInPicture2,
   Pin,
   PinOff,
   Users,
@@ -272,10 +278,24 @@ function ConferenceStage({
   const settingsRef = useRef<MediaSettings>(settings);
 
   const [panel, setPanel] = useState<Panel | null>(null);
+
+  // O chat vive aqui, e não no painel: o painel desmonta ao fechar, e com ele
+  // iriam o histórico e o rascunho.
+  const chat = useChat();
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatSeen, setChatSeen] = useState(0);
+  const chatCount = chat.chatMessages.length;
+  useEffect(() => {
+    if (panel === "chat") setChatSeen(chatCount);
+  }, [panel, chatCount]);
+  const chatUnread = panel === "chat" ? 0 : Math.max(0, chatCount - chatSeen);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
-  const [pinned, setPinned] = useState<string | null>(null);
+  // Quadros fixados no destaque, na ordem em que entraram. Mais de um divide o
+  // palco em partes iguais (ex.: a tela de alguém ao lado da câmera dele).
+  const [pinned, setPinned] = useState<string[]>([]);
+  const [dockHidden, setDockHidden] = useState(readDockHidden);
   const [unstableConnection, setUnstableConnection] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [screenShareError, setScreenShareError] = useState<string | null>(null);
@@ -725,13 +745,96 @@ function ConferenceStage({
      então a primeira tela compartilhada. Sem destaque, as câmeras dividem o
      palco numa grade que se recalcula com o espaço. */
   const allTiles: TrackReferenceOrPlaceholder[] = [...screenShareRefs, ...cameraTiles];
-  const pinnedTile = pinned ? allTiles.find((t) => tileKey(t) === pinned) : undefined;
-  const focus = pinnedTile ?? screenShareRefs[0];
-  const focusKey = focus ? tileKey(focus) : null;
-  const strip = focus ? allTiles.filter((t) => tileKey(t) !== focusKey) : [];
+  const pinnedTiles = pinned
+    .map((key) => allTiles.find((t) => tileKey(t) === key))
+    .filter((t): t is TrackReferenceOrPlaceholder => t !== undefined);
+  const focusTiles =
+    pinnedTiles.length > 0 ? pinnedTiles : screenShareRefs[0] ? [screenShareRefs[0]] : [];
+  const focusKeys = focusTiles.map(tileKey);
+  const focus = focusTiles[0];
+  const strip = focus ? allTiles.filter((t) => !focusKeys.includes(tileKey(t))) : [];
 
+  /** Fixar troca o destaque por este quadro; num quadro já fixado, solta. */
   const togglePin = useCallback((key: string) => {
-    setPinned((current) => (current === key ? null : key));
+    setPinned((current) => (current.includes(key) ? current.filter((k) => k !== key) : [key]));
+  }, []);
+
+  /** Lado a lado: soma o quadro ao que já está em destaque, em tamanho igual. */
+  const focusKeysJoined = focusKeys.join("|");
+  const addSideBySide = useCallback(
+    (key: string) => {
+      const base = focusKeysJoined ? focusKeysJoined.split("|") : [];
+      setPinned(base.includes(key) ? base : [...base, key]);
+    },
+    [focusKeysJoined],
+  );
+
+  /* --- Janelas separadas --------------------------------------------------
+     Um quadro pode ir para uma janela própria (para arrastar a outro monitor).
+     A janela é `about:blank` da mesma origem: o vídeo dela usa a MESMA trilha
+     já recebida aqui, sem nova assinatura no SFU. Ela segue a trilha se ela
+     for trocada e fecha quando o quadro some (a pessoa parou a tela ou saiu). */
+  const popouts = useRef(new Map<string, Popout>());
+
+  const openPopout = useCallback((trackRef: TrackReferenceOrPlaceholder, label: string) => {
+    const key = tileKey(trackRef);
+    const existing = popouts.current.get(key);
+    if (existing && !existing.win.closed) {
+      existing.win.focus();
+      return;
+    }
+    const track = trackRef.publication?.track?.mediaStreamTrack;
+    if (!track) {
+      setControlError("Este quadro ainda não tem vídeo para abrir em outra janela.");
+      return;
+    }
+    const isScreen = trackRef.source === Track.Source.ScreenShare;
+    const win = window.open(
+      "",
+      `myscreen-${key.replace(/[^a-z0-9]/gi, "-")}`,
+      isScreen ? "popup,width=1280,height=720" : "popup,width=640,height=360",
+    );
+    if (!win) {
+      setControlError("O navegador bloqueou a nova janela. Libere pop-ups para este site e tente de novo.");
+      return;
+    }
+    const video = mountPopout(win, label, trackRef.participant.isLocal && !isScreen);
+    video.srcObject = new MediaStream([track]);
+    popouts.current.set(key, { win, video, track });
+  }, []);
+
+  useEffect(() => {
+    for (const [key, popout] of popouts.current) {
+      const tile = allTiles.find((t) => tileKey(t) === key);
+      const track = tile?.publication?.track?.mediaStreamTrack;
+      if (popout.win.closed || !tile) {
+        if (!popout.win.closed) popout.win.close();
+        popouts.current.delete(key);
+      } else if (track && track !== popout.track) {
+        popout.video.srcObject = new MediaStream([track]);
+        popout.track = track;
+      }
+    }
+  });
+
+  useEffect(() => {
+    const map = popouts.current;
+    const closeAll = () => {
+      for (const { win } of map.values()) if (!win.closed) win.close();
+      map.clear();
+    };
+    window.addEventListener("pagehide", closeAll);
+    return () => {
+      window.removeEventListener("pagehide", closeAll);
+      closeAll();
+    };
+  }, []);
+
+  const toggleDock = useCallback(() => {
+    setDockHidden((hidden) => {
+      writeDockHidden(!hidden);
+      return !hidden;
+    });
   }, []);
 
   const participantCount = useParticipants().length;
@@ -774,7 +877,10 @@ function ConferenceStage({
   const closeShareDialog = useCallback(() => setIsShareDialogOpen(false), []);
 
   const tileProps = {
-    pinnedKey: pinned,
+    pinnedKeys: pinned,
+    canSideBySide: focus !== undefined,
+    onSideBySide: addSideBySide,
+    onPopout: openPopout,
     fullscreenEl,
     onTogglePin: togglePin,
     onToggleFullscreen: toggleFullscreen,
@@ -826,6 +932,8 @@ function ConferenceStage({
             label="Chat"
             open={panel === "chat"}
             onClick={() => setPanel((p) => (p === "chat" ? null : "chat"))}
+            badge={chatUnread > 0 ? chatUnread : undefined}
+            badgeTone="signal"
           >
             <MessageSquare size={17} strokeWidth={1.75} aria-hidden />
           </BarToggle>
@@ -873,7 +981,11 @@ function ConferenceStage({
           {focus ? (
             <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
               <div className="flex min-h-0 min-w-0 flex-1">
-                <Tile trackRef={focus} variant="stage" {...tileProps} />
+                {focusTiles.length > 1 ? (
+                  <CameraGrid tiles={focusTiles} variant="stage" tileProps={tileProps} />
+                ) : (
+                  <Tile trackRef={focus} variant="stage" {...tileProps} />
+                )}
               </div>
               {strip.length > 0 ? (
                 <div className="flex h-[7.5rem] shrink-0 gap-3 overflow-x-auto sm:h-[9rem] lg:h-auto lg:w-[15rem] lg:flex-col lg:overflow-x-visible lg:overflow-y-auto xl:w-[17rem]">
@@ -898,7 +1010,15 @@ function ConferenceStage({
         {panel ? (
           <div className="absolute inset-0 z-10 flex min-h-0 flex-col border-l border-rule bg-sheet sm:static sm:w-[22rem] sm:shrink-0">
             {panel === "chat" ? (
-              <ChatSidebar isOpen onClose={() => setPanel(null)} />
+              <ChatSidebar
+                isOpen
+                onClose={() => setPanel(null)}
+                chatMessages={chat.chatMessages}
+                send={chat.send}
+                isSending={chat.isSending}
+                draft={chatDraft}
+                onDraftChange={setChatDraft}
+              />
             ) : panel === "people" ? (
               <ParticipantsList isOpen onClose={() => setPanel(null)} />
             ) : (
@@ -910,8 +1030,33 @@ function ConferenceStage({
         ) : null}
       </div>
 
-      {/* --- Doca -------------------------------------------------------- */}
-      <footer className="shrink-0 border-t border-rule bg-sheet/80 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-md">
+      {/* --- Doca --------------------------------------------------------
+         Recolhível: escondida, sobra só uma alça no rodapé e o palco ganha a
+         altura inteira. A escolha fica no navegador. */}
+      {dockHidden ? (
+        <button
+          type="button"
+          onClick={toggleDock}
+          aria-label="Mostrar controles"
+          title="Mostrar controles"
+          className={cn(DOCK_HANDLE, "bottom-0 z-20")}
+        >
+          <ChevronUp size={16} strokeWidth={1.75} aria-hidden />
+        </button>
+      ) : null}
+      <footer
+        hidden={dockHidden}
+        className="relative shrink-0 border-t border-rule bg-sheet/80 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-md"
+      >
+        <button
+          type="button"
+          onClick={toggleDock}
+          aria-label="Esconder controles"
+          title="Esconder controles"
+          className={cn(DOCK_HANDLE, "-top-6")}
+        >
+          <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
+        </button>
         <MediaControls
           isMicOn={isMicOn}
           isCamOn={isCamOn}
@@ -952,12 +1097,76 @@ function ConferenceStage({
 
 type Panel = "chat" | "people" | "stats";
 
+type Popout = { win: Window; video: HTMLVideoElement; track: MediaStreamTrack };
+
+/**
+ * Monta a página da janela separada: só o vídeo, em fundo preto. Duplo clique
+ * alterna a tela cheia, e o cursor some depois de um tempo parado.
+ */
+function mountPopout(win: Window, title: string, mirror: boolean): HTMLVideoElement {
+  const doc = win.document;
+  doc.title = `${title} · MyScreen`;
+  doc.body.replaceChildren();
+  doc.body.style.cssText = "margin:0;background:#000;overflow:hidden;height:100vh";
+
+  const video = doc.createElement("video");
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.style.cssText = `display:block;width:100vw;height:100vh;object-fit:contain${
+    mirror ? ";transform:scaleX(-1)" : ""
+  }`;
+  doc.body.append(video);
+
+  video.addEventListener("dblclick", () => {
+    if (doc.fullscreenElement) void doc.exitFullscreen();
+    else void doc.documentElement.requestFullscreen().catch(() => {});
+  });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const wake = () => {
+    doc.body.style.cursor = "";
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      doc.body.style.cursor = "none";
+    }, FULLSCREEN_IDLE_MS);
+  };
+  doc.addEventListener("pointermove", wake);
+  wake();
+
+  return video;
+}
+
+const DOCK_HANDLE =
+  "absolute left-1/2 flex h-6 w-16 -translate-x-1/2 items-center justify-center border border-b-0 border-rule-2 bg-sheet/85 text-ink-2 backdrop-blur-md transition-colors hover:bg-band hover:text-ink [border-radius:var(--radius-cell)_var(--radius-cell)_0_0]";
+
+const DOCK_HIDDEN_KEY = "myscreen:dock-hidden";
+
+function readDockHidden(): boolean {
+  try {
+    return localStorage.getItem(DOCK_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeDockHidden(hidden: boolean) {
+  try {
+    localStorage.setItem(DOCK_HIDDEN_KEY, hidden ? "1" : "0");
+  } catch {
+    // Sem storage, a escolha vale só para esta sessão.
+  }
+}
+
 function tileKey(t: TrackReferenceOrPlaceholder): string {
   return `${t.participant.identity}:${t.source}`;
 }
 
 type TileShared = {
-  pinnedKey: string | null;
+  pinnedKeys: string[];
+  canSideBySide: boolean;
+  onSideBySide: (key: string) => void;
+  onPopout: (trackRef: TrackReferenceOrPlaceholder, label: string) => void;
   fullscreenEl: Element | null;
   onTogglePin: (key: string) => void;
   onToggleFullscreen: (element: Element | null) => void;
@@ -976,9 +1185,11 @@ const ASPECT = 16 / 9;
 function CameraGrid({
   tiles,
   tileProps,
+  variant = "grid",
 }: {
   tiles: TrackReferenceOrPlaceholder[];
   tileProps: TileShared;
+  variant?: "stage" | "grid";
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -1017,7 +1228,7 @@ function CameraGrid({
               className="transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
               style={{ width: Math.floor(best.w), height: Math.floor(best.h) }}
             >
-              <Tile trackRef={t} variant="grid" {...tileProps} />
+              <Tile trackRef={t} variant={variant} {...tileProps} />
             </div>
           ))
         : null}
@@ -1035,7 +1246,10 @@ function CameraGrid({
 function Tile({
   trackRef,
   variant,
-  pinnedKey,
+  pinnedKeys,
+  canSideBySide,
+  onSideBySide,
+  onPopout,
   fullscreenEl,
   onTogglePin,
   onToggleFullscreen,
@@ -1047,7 +1261,7 @@ function Tile({
   const participant = trackRef.participant;
   const key = tileKey(trackRef);
   const isScreen = trackRef.source === Track.Source.ScreenShare;
-  const isPinned = pinnedKey === key;
+  const isPinned = pinnedKeys.includes(key);
   const isFullscreen = fullscreenEl !== null && fullscreenEl === ref.current;
 
   const speaking = useIsSpeaking(participant);
@@ -1069,15 +1283,62 @@ function Tile({
       : name;
   const small = variant === "strip";
 
+  // Em tela cheia, nome e ações só aparecem quando o mouse mexe, e somem (com
+  // o cursor) depois de um tempo parado: o quadro é para ser assistido.
+  const [chromeAwake, setChromeAwake] = useState(true);
+  useEffect(() => {
+    const el = ref.current;
+    if (!isFullscreen || !el) {
+      setChromeAwake(true);
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const wake = () => {
+      setChromeAwake(true);
+      clearTimeout(timer);
+      timer = setTimeout(() => setChromeAwake(false), FULLSCREEN_IDLE_MS);
+    };
+    wake();
+    el.addEventListener("pointermove", wake);
+    el.addEventListener("pointerdown", wake);
+    el.addEventListener("keydown", wake);
+    return () => {
+      clearTimeout(timer);
+      el.removeEventListener("pointermove", wake);
+      el.removeEventListener("pointerdown", wake);
+      el.removeEventListener("keydown", wake);
+    };
+  }, [isFullscreen]);
+  const chromeHidden = isFullscreen && !chromeAwake;
+
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [canPip, setCanPip] = useState(false);
+  useEffect(() => {
+    setCanPip(Boolean(document.pictureInPictureEnabled));
+  }, []);
+
+  const openPip = () => {
+    const video = ref.current?.querySelector("video");
+    if (!video) return;
+    void video.requestPictureInPicture().catch((error: unknown) => {
+      console.error("Janela flutuante recusada:", error);
+    });
+  };
+
   return (
     <div
       ref={ref}
       onDoubleClick={() => onToggleFullscreen(ref.current)}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMenu({ x: event.clientX, y: event.clientY });
+      }}
       className={cn(
         "group relative flex h-full w-full items-center justify-center overflow-hidden bg-monitor ring-1 ring-rule [border-radius:var(--radius-sheet)]",
         "outline outline-2 -outline-offset-2 transition-[outline-color] duration-200",
         speaking && !isScreen ? "outline-signal" : "outline-transparent",
         isFullscreen && "[border-radius:0]",
+        chromeHidden && "cursor-none",
       )}
     >
       {hasVideo ? (
@@ -1102,7 +1363,12 @@ function Tile({
       )}
 
       {/* Identificação: sempre legível sobre qualquer imagem. */}
-      <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-[0.75rem] font-medium text-white backdrop-blur-sm">
+      <div
+        className={cn(
+          "pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-[0.75rem] font-medium text-white backdrop-blur-sm transition-opacity duration-300",
+          chromeHidden && "opacity-0",
+        )}
+      >
         {isScreen ? (
           <MonitorUp size={12} strokeWidth={2} aria-hidden className="shrink-0" />
         ) : micMuted ? (
@@ -1112,10 +1378,28 @@ function Tile({
         {!isScreen && micMuted ? <span className="sr-only">, microfone mudo</span> : null}
       </div>
 
-      {/* Ações do quadro: aparecem no hover e no foco; no toque, sempre. */}
-      <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+      {/* Ações do quadro: aparecem no hover e no foco; no toque, sempre. Em
+          tela cheia, só enquanto o mouse se mexe. */}
+      <div
+        className={cn(
+          "absolute top-2 right-2 flex gap-1 transition-opacity duration-150",
+          isFullscreen
+            ? chromeHidden
+              ? "pointer-events-none opacity-0 duration-300"
+              : "opacity-100"
+            : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100",
+        )}
+      >
         {isScreen && !participant.isLocal ? (
           <ScreenVolume participant={participant as RemoteParticipant} />
+        ) : null}
+        {variant === "strip" && canSideBySide ? (
+          <TileAction
+            label={`Pôr ${label} lado a lado no destaque`}
+            onClick={() => onSideBySide(key)}
+          >
+            <Columns2 size={14} strokeWidth={1.75} aria-hidden />
+          </TileAction>
         ) : null}
         <TileAction
           label={isPinned ? `Soltar ${label}` : `Fixar ${label} em destaque`}
@@ -1134,6 +1418,51 @@ function Tile({
           <Maximize2 size={14} strokeWidth={1.75} aria-hidden />
         </TileAction>
       </div>
+
+      {menu ? (
+        <TileMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            {
+              label: "Abrir em nova janela",
+              icon: <ExternalLink size={14} strokeWidth={1.75} aria-hidden />,
+              disabled: !hasVideo,
+              onSelect: () => onPopout(trackRef, label),
+            },
+            canPip
+              ? {
+                  label: "Janela flutuante",
+                  icon: <PictureInPicture2 size={14} strokeWidth={1.75} aria-hidden />,
+                  disabled: !hasVideo,
+                  onSelect: openPip,
+                }
+              : null,
+            variant === "strip" && canSideBySide
+              ? {
+                  label: "Pôr lado a lado no destaque",
+                  icon: <Columns2 size={14} strokeWidth={1.75} aria-hidden />,
+                  onSelect: () => onSideBySide(key),
+                }
+              : null,
+            {
+              label: isPinned ? "Soltar do destaque" : "Fixar em destaque",
+              icon: isPinned ? (
+                <PinOff size={14} strokeWidth={1.75} aria-hidden />
+              ) : (
+                <Pin size={14} strokeWidth={1.75} aria-hidden />
+              ),
+              onSelect: () => onTogglePin(key),
+            },
+            {
+              label: isFullscreen ? "Sair da tela cheia" : "Tela cheia",
+              icon: <Maximize2 size={14} strokeWidth={1.75} aria-hidden />,
+              onSelect: () => onToggleFullscreen(ref.current),
+            },
+          ]}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1207,6 +1536,96 @@ function ScreenVolume({ participant }: { participant: RemoteParticipant }) {
   );
 }
 
+const FULLSCREEN_IDLE_MS = 2500;
+
+type TileMenuItem = {
+  label: string;
+  icon: React.ReactNode;
+  disabled?: boolean;
+  onSelect: () => void;
+};
+
+/**
+ * Menu do botão direito num quadro. Fica dentro do próprio quadro (com
+ * `position: fixed`) para continuar visível quando o quadro está em tela cheia.
+ */
+function TileMenu({
+  x,
+  y,
+  items,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  items: (TileMenuItem | null)[];
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+
+  // Encosta o menu para dentro da janela quando o clique foi perto da borda.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    setPos({
+      left: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
+      top: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
+    });
+    el.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }, [x, y]);
+
+  useEffect(() => {
+    const onPointer = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) onClose();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("pointerdown", onPointer, true);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onClose);
+    window.addEventListener("resize", onClose);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onClose);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      onContextMenu={(event) => event.preventDefault()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      className="fixed z-[70] min-w-[13rem] border border-rule-2 bg-sheet py-1 text-ink shadow-overlay [border-radius:var(--radius-sheet)]"
+      style={pos}
+    >
+      {items
+        .filter((item): item is TileMenuItem => item !== null)
+        .map((item) => (
+          <button
+            key={item.label}
+            type="button"
+            role="menuitem"
+            disabled={item.disabled}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+              item.onSelect();
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[0.8125rem] transition-colors hover:bg-band focus:bg-band focus:outline-none disabled:pointer-events-none disabled:opacity-40"
+          >
+            <span className="shrink-0 text-ink-2">{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+    </div>
+  );
+}
+
 function TileAction({
   children,
   label,
@@ -1271,12 +1690,14 @@ function BarToggle({
   open,
   onClick,
   badge,
+  badgeTone = "plain",
 }: {
   children: React.ReactNode;
   label: string;
   open: boolean;
   onClick: () => void;
   badge?: number;
+  badgeTone?: "plain" | "signal";
 }) {
   return (
     <button
@@ -1294,7 +1715,15 @@ function BarToggle({
     >
       {children}
       {badge !== undefined ? (
-        <span className="font-mono text-[0.75rem] [font-variant-numeric:tabular-nums]">{badge}</span>
+        <span
+          className={cn(
+            "font-mono text-[0.75rem] [font-variant-numeric:tabular-nums]",
+            badgeTone === "signal" &&
+              "min-w-4 rounded-full bg-signal px-1 text-center text-[0.6875rem] font-semibold text-on-signal",
+          )}
+        >
+          {badge}
+        </span>
       ) : null}
     </button>
   );
