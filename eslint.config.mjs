@@ -7,7 +7,7 @@ const compat = new FlatCompat({ baseDirectory: dirname(fileURLToPath(import.meta
 const config = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
-    ignores: [".next/**", "node_modules/**", "next-env.d.ts", "prisma/**"],
+    ignores: [".next/**", "node_modules/**", "next-env.d.ts", "prisma/**", "desktop/**"],
   },
 ];
 
