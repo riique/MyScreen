@@ -103,12 +103,20 @@ describe("POST /api/livekit/token", () => {
     expect(body.participantIdentity as string).toMatch(/^ana-[0-9a-f]{8}$/);
   });
 
-  it("reaproveita a identidade no refresh, mas nao a de outro apelido", async () => {
+  it("reaproveita a identidade no refresh com a prova, mas nao a de outro apelido", async () => {
     roomFindUnique.mockResolvedValue(aberta);
     const primeira = await (await token(post({ roomId: "abc", nickname: "ana" }))).json();
+    expect(typeof primeira.identityProof).toBe("string");
 
     const refresh = await (
-      await token(post({ roomId: "abc", nickname: "ana", participantIdentity: primeira.participantIdentity }))
+      await token(
+        post({
+          roomId: "abc",
+          nickname: "ana",
+          participantIdentity: primeira.participantIdentity,
+          identityProof: primeira.identityProof,
+        })
+      )
     ).json();
     expect(refresh.participantIdentity).toBe(primeira.participantIdentity);
 
@@ -119,5 +127,41 @@ describe("POST /api/livekit/token", () => {
       await token(post({ roomId: "abc", nickname: "ana", participantIdentity: "bob-12345678" }))
     ).json();
     expect(forgery.participantIdentity).not.toBe("bob-12345678");
+  });
+
+  it("sem prova nao reusa: mesmo apelido nao toma a identidade de quem esta na sala", async () => {
+    // A identidade de todos e visivel na sala. Sem a prova, quem entrasse com o
+    // mesmo apelido pediria a identidade alheia e o SFU derrubaria o dono —
+    // com controle remoto, sequestro da sessao de controle.
+    roomFindUnique.mockResolvedValue(aberta);
+    const dona = await (await token(post({ roomId: "abc", nickname: "ana" }))).json();
+    const semProva = await (
+      await token(post({ roomId: "abc", nickname: "ana", participantIdentity: dona.participantIdentity }))
+    ).json();
+    expect(semProva.participantIdentity).not.toBe(dona.participantIdentity);
+
+    const provaErrada = await (
+      await token(
+        post({ roomId: "abc", nickname: "ana", participantIdentity: dona.participantIdentity, identityProof: "x".repeat(43) })
+      )
+    ).json();
+    expect(provaErrada.participantIdentity).not.toBe(dona.participantIdentity);
+  });
+
+  it("prova de outra sala nao reusa", async () => {
+    roomFindUnique.mockResolvedValue({ ...aberta, id: "outra" });
+    const outra = await (await token(post({ roomId: "outra", nickname: "ana" }))).json();
+    roomFindUnique.mockResolvedValue(aberta);
+    const res = await (
+      await token(
+        post({
+          roomId: "abc",
+          nickname: "ana",
+          participantIdentity: outra.participantIdentity,
+          identityProof: outra.identityProof,
+        })
+      )
+    ).json();
+    expect(res.participantIdentity).not.toBe(outra.participantIdentity);
   });
 });

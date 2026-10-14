@@ -48,6 +48,8 @@ export default function RoomPage({ params }: RoomPageProps) {
   const [serverUrl, setServerUrl] = useState<string | null>(null);
   const [participantName, setParticipantName] = useState<string | null>(null);
   const [participantIdentity, setParticipantIdentity] = useState<string | null>(null);
+  // Prova do servidor para reusar a identidade no refresh (sem ela, identidade nova).
+  const [identityProof, setIdentityProof] = useState<string | null>(null);
   const [joinPassword, setJoinPassword] = useState<string | undefined>(undefined);
   const [joinConfig, setJoinConfig] = useState<
     Pick<
@@ -121,6 +123,7 @@ export default function RoomPage({ params }: RoomPageProps) {
           // Lembrar o apelido é conveniência, não requisito.
         }
         setParticipantIdentity(data.participantIdentity || null);
+        setIdentityProof(typeof data.identityProof === "string" ? data.identityProof : null);
         setJoinPassword(config.password);
         setJoinConfig({
           audioEnabled: config.audioEnabled,
@@ -151,16 +154,18 @@ export default function RoomPage({ params }: RoomPageProps) {
           roomId,
           nickname: participantName,
           participantIdentity,
+          identityProof: identityProof ?? undefined,
           password: joinPassword,
         }),
       });
       if (!res.ok) return;
       const data = await res.json();
       if (data.token) setToken(data.token);
+      if (typeof data.identityProof === "string") setIdentityProof(data.identityProof);
     } catch {
       // Renovar é rotina: falhar aqui derruba a chamada em curso sem necessidade.
     }
-  }, [roomId, participantIdentity, participantName, joinPassword]);
+  }, [roomId, participantIdentity, identityProof, participantName, joinPassword]);
 
   useEffect(() => {
     if (!joined) return;

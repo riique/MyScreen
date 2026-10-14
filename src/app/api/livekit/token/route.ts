@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { comparePassword, exceedsBcryptLimit } from "@/lib/auth";
-import { createLiveKitToken } from "@/lib/livekit";
+import { createLiveKitToken, identityProof, verifyIdentityProof } from "@/lib/livekit";
 import { env } from "@/lib/env";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { str, withErrorHandling } from "@/lib/validate";
@@ -62,13 +62,12 @@ async function handleToken(req: Request): Promise<NextResponse> {
   // segunda identidade: participante duplicado na sala por ate 300s e
   // `localIdentity` trocado no chat.
   //
-  // A identidade so e REUSADA quando casa com a forma que este proprio
-  // servidor emite para ESTE apelido: `<apelido-sanitizado>-<8 hex>`. Sem essa
-  // checagem, o corpo da requisicao viraria um vetor de impersonacao — o
-  // atacante escreveria `participantIdentity` de outra pessoa e receberia um
-  // AccessToken assinado com a identidade alheia, entrando na sala como ela
-  // (com nome e avatar no chat). Vinculando o prefixo ao apelido da propria
-  // requisicao, ninguem consegue reivindicar a identidade de outro apelido.
+  // A identidade so e REUSADA com PROVA: o HMAC que este servidor devolveu
+  // junto com ela (`identityProof`, amarrado a sala). A forma
+  // `<apelido-sanitizado>-<8 hex>` sozinha nao basta — a identidade de todos e
+  // visivel para todos na sala, entao qualquer um com o mesmo apelido pediria
+  // a identidade alheia e o SFU derrubaria o dono. Com o controle remoto isso
+  // seria sequestro da sessao de controle.
   const identityPrefix = `${nickname.replace(/[^a-zA-Z0-9_-]/g, "_")}-`;
   const provided =
     typeof body.participantIdentity === "string" ? body.participantIdentity.trim() : "";
@@ -77,7 +76,8 @@ async function handleToken(req: Request): Promise<NextResponse> {
     provided.length <= 64 &&
     provided.startsWith(identityPrefix) &&
     provided.length === identityPrefix.length + 8 &&
-    /^[0-9a-f]{8}$/.test(provided.slice(identityPrefix.length));
+    /^[0-9a-f]{8}$/.test(provided.slice(identityPrefix.length)) &&
+    verifyIdentityProof(roomId, provided, body.identityProof);
 
   const participantIdentity = reusesIssuedIdentity
     ? provided
@@ -94,6 +94,7 @@ async function handleToken(req: Request): Promise<NextResponse> {
     livekitUrl: env.publicLiveKitUrl,
     participantIdentity,
     participantName: nickname,
+    identityProof: identityProof(roomId, participantIdentity),
   });
 }
 
