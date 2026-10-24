@@ -52,3 +52,6 @@ livekit.yaml
 # App MyScreen Audio (Rust): binarios de build
 /companion/target/
 /companion/installer/target/
+
+# Audios tocados nas chamadas: ficam so no servidor (montados no container)
+/sounds/

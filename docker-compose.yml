@@ -48,8 +48,11 @@ services:
       # abriria. Como o Caddy so encaminha `/rtc*` para o SFU e o SDK anexa
       # `/rtc/v1`, `wss://<DOMAIN>` e exatamente a URL publica correta.
       NEXT_PUBLIC_LIVEKIT_URL: "wss://${DOMAIN:-localhost}"
+      SOUNDS_DIR: "/app/sounds"
     volumes:
       - app-data:/app/data
+      # Áudios que podem ser tocados nas chamadas (`/api/sounds`).
+      - ./sounds:/app/sounds:ro
     depends_on:
       migrate:
         condition: service_completed_successfully
