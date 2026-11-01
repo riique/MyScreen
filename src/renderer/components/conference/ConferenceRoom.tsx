@@ -56,7 +56,7 @@ import { SystemAudioControl } from "./SystemAudioControl";
 import { TrackStatsDropdown } from "./TrackStatsDropdown";
 import { ConsentDialog } from "./remote/ConsentDialog";
 import { ControlOverlay } from "./remote/ControlOverlay";
-import { ControlToolbar } from "./remote/ControlToolbar";
+import { ControllingPill, ControlToolbar } from "./remote/ControlToolbar";
 import { PANIC_SHORTCUT_LABEL } from "./remote/labels";
 import { useRemoteControlHost, type HostShare } from "./remote/useRemoteControlHost";
 import { useRemoteControlViewer, type RemoteViewer } from "./remote/useRemoteControlViewer";
@@ -355,6 +355,12 @@ function ConferenceStage({
     sendChat: roomChat.send,
   });
   const remoteViewer = useRemoteControlViewer(room);
+  // "Enviar texto" abre pela barra da sala, mas o formulário fica no quadro.
+  const [rcTextOpen, setRcTextOpen] = useState(false);
+  const rcActive = remoteViewer.state.phase === "active";
+  useEffect(() => {
+    if (!rcActive) setRcTextOpen(false);
+  }, [rcActive]);
 
   /* --- Gravação ------------------------------------------------------------ */
   const recording = useRecording({
@@ -1021,6 +1027,8 @@ function ConferenceStage({
     onTogglePin: togglePin,
     onToggleFullscreen: toggleFullscreen,
     remote: remoteViewer,
+    rcTextOpen,
+    setRcTextOpen,
   };
 
   return (
@@ -1065,6 +1073,15 @@ function ConferenceStage({
               count={recording.recordings.length}
               since={Math.min(...recording.recordings.map((r) => r.startedAt))}
               onClick={() => setIsRecordOpen(true)}
+            />
+          ) : null}
+          {remoteViewer.state.phase === "active" ? (
+            <ControllingPill
+              state={remoteViewer.state}
+              textOpen={rcTextOpen}
+              onToggleText={() => setRcTextOpen((v) => !v)}
+              onFullscreen={() => toggleFullscreen(document.querySelector("[data-rc-controlled]"))}
+              onStop={remoteViewer.stop}
             />
           ) : null}
           <CopyLinkButton url={platform.inviteUrl(roomId)} />
@@ -1382,6 +1399,8 @@ type TileShared = {
   onTogglePin: (key: string) => void;
   onToggleFullscreen: (element: Element | null) => void;
   remote: RemoteViewer;
+  rcTextOpen: boolean;
+  setRcTextOpen: (open: boolean | ((v: boolean) => boolean)) => void;
 };
 
 /* ---------------------------------------------------------------------------
@@ -1540,6 +1559,8 @@ function Tile({
   onTogglePin,
   onToggleFullscreen,
   remote,
+  rcTextOpen,
+  setRcTextOpen,
 }: {
   trackRef: TrackReferenceOrPlaceholder;
   variant: "stage" | "grid" | "strip";
@@ -1620,6 +1641,7 @@ function Tile({
   return (
     <div
       ref={ref}
+      data-rc-controlled={controlling ? "" : undefined}
       // Controlando, o duplo clique e o botão direito são do PC remoto.
       onDoubleClick={() => {
         if (!controlling) onToggleFullscreen(ref.current);
@@ -1668,6 +1690,9 @@ function Tile({
             state={rs}
             clip={remote.clipNotice}
             hidden={chromeHidden}
+            bar={isFullscreen}
+            textOpen={rcTextOpen}
+            setTextOpen={setRcTextOpen}
             onFullscreen={() => onToggleFullscreen(ref.current)}
             onStop={remote.stop}
             send={remote.send}
