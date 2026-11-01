@@ -47,6 +47,7 @@ import {
 } from "@shared/media";
 import { ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
 import { ChatSidebar } from "./ChatSidebar";
+import { useRoomChat } from "./useRoomChat";
 import { MediaControls } from "./MediaControls";
 import { ParticipantsList } from "./ParticipantsList";
 import { SettingsModal, type MediaSettings } from "./SettingsModal";
@@ -79,8 +80,6 @@ import { usePlatform } from "@/platform";
 import {
   Activity,
   Check,
-  ChevronDown,
-  ChevronUp,
   Columns2,
   ExternalLink,
   Link2,
@@ -313,6 +312,8 @@ function ConferenceStage({
 
   // O chat vive aqui, e não no painel: o painel desmonta ao fechar.
   const chat = useChat();
+  // Histórico guardado no servidor + o que chega ao vivo; apagar vale para todos.
+  const roomChat = useRoomChat({ room, roomId, roomToken: token, live: chat.chatMessages, sendLive: chat.send });
   const [chatDraft, setChatDraft] = useState("");
   const [chatSeen, setChatSeen] = useState(0);
   const chatCount = chat.chatMessages.length;
@@ -351,7 +352,7 @@ function ConferenceStage({
     share: hostShare,
     disabled: remoteDisabled,
     myName: localParticipant.name || localParticipant.identity || "você",
-    sendChat: chat.send,
+    sendChat: roomChat.send,
   });
   const remoteViewer = useRemoteControlViewer(room);
 
@@ -359,18 +360,17 @@ function ConferenceStage({
   const recording = useRecording({
     room,
     myName: localParticipant.name || localParticipant.identity || "Alguém",
-    sendChat: chat.send,
+    sendChat: roomChat.send,
   });
   const [isRecordOpen, setIsRecordOpen] = useState(false);
 
   /* --- Áudios do servidor (o botão só aparece para quem ligou; o som, todos ouvem) */
-  const soundboard = useSoundboard(room);
+  const soundboard = useSoundboard(room, token);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string[]>([]);
-  const [dockHidden, setDockHidden] = useState(readDockHidden);
   const [unstableConnection, setUnstableConnection] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [screenShareError, setScreenShareError] = useState<string | null>(null);
@@ -935,13 +935,6 @@ function ConferenceStage({
     };
   }, []);
 
-  const toggleDock = useCallback(() => {
-    setDockHidden((hidden) => {
-      writeDockHidden(!hidden);
-      return !hidden;
-    });
-  }, []);
-
   const participants = useParticipants();
   const participantCount = participants.length;
 
@@ -1162,8 +1155,10 @@ function ConferenceStage({
               <ChatSidebar
                 isOpen
                 onClose={() => setPanel(null)}
-                chatMessages={chat.chatMessages}
-                send={chat.send}
+                chatMessages={roomChat.entries}
+                send={roomChat.send}
+                onDelete={roomChat.remove}
+                loadFile={roomChat.loadFile}
                 isSending={chat.isSending}
                 draft={chatDraft}
                 onDraftChange={setChatDraft}
@@ -1189,28 +1184,8 @@ function ConferenceStage({
         ) : null}
       </div>
 
-      {/* --- Doca recolhível -------------------------------------------- */}
-      {dockHidden ? (
-        <button
-          type="button"
-          onClick={toggleDock}
-          aria-label="Mostrar controles"
-          title="Mostrar controles"
-          className={cn(DOCK_HANDLE, "bottom-0 z-20")}
-        >
-          <ChevronUp size={16} strokeWidth={1.75} aria-hidden />
-        </button>
-      ) : null}
-      <footer hidden={dockHidden} className="relative shrink-0 border-t border-rule bg-sheet px-3 pt-3 pb-3">
-        <button
-          type="button"
-          onClick={toggleDock}
-          aria-label="Esconder controles"
-          title="Esconder controles"
-          className={cn(DOCK_HANDLE, "-top-6")}
-        >
-          <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
-        </button>
+      {/* --- Doca ------------------------------------------------------- */}
+      <footer className="relative shrink-0 border-t border-rule bg-sheet px-3 pt-3 pb-3">
         <MediaControls
           isMicOn={isMicOn}
           isCamOn={isCamOn}
@@ -1336,27 +1311,6 @@ function mountPopout(win: Window, title: string, mirror: boolean): HTMLVideoElem
   wake();
 
   return video;
-}
-
-const DOCK_HANDLE =
-  "absolute left-3 flex h-6 w-16 items-center justify-center border border-b-0 border-rule-2 bg-sheet/85 text-ink-2 backdrop-blur-md transition-colors hover:bg-band hover:text-ink [border-radius:var(--radius-cell)_var(--radius-cell)_0_0]";
-
-const DOCK_HIDDEN_KEY = "myscreen:dock-hidden";
-
-function readDockHidden(): boolean {
-  try {
-    return localStorage.getItem(DOCK_HIDDEN_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function writeDockHidden(hidden: boolean) {
-  try {
-    localStorage.setItem(DOCK_HIDDEN_KEY, hidden ? "1" : "0");
-  } catch {
-    // Sem storage, a escolha vale só para esta sessão.
-  }
 }
 
 function tileKey(t: TrackReferenceOrPlaceholder): string {

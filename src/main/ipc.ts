@@ -7,6 +7,7 @@ import { closeRecording, openRecording, revealRecording, writeRecording } from "
 import { registerRemote, stopRemoteControl } from "./remote";
 import {
   asBoolean,
+  asBytes,
   asNumber,
   asObject,
   asOptionalString,
@@ -15,7 +16,20 @@ import {
   isAppUrl,
   normalizeServerUrl,
 } from "./security";
-import { createRoom, desktopInfo, fetchSound, getRoom, listSounds, token } from "./server";
+import {
+  chatAppend,
+  chatDelete,
+  chatFile,
+  chatHistory,
+  chatUploadFile,
+  createRoom,
+  desktopInfo,
+  fetchSound,
+  getRoom,
+  listSounds,
+  token,
+  uploadSound,
+} from "./server";
 import { getSettings, updateSettings } from "./settings";
 import { parseMediaPrefs } from "../shared/media";
 import { applyAutoDownload, checkForUpdates, configureFeed, downloadUpdate, installUpdate, updateStatus } from "./updater";
@@ -162,6 +176,37 @@ export function registerIpc(): void {
   handle("api:desktopInfo", () => desktopInfo());
   handle("api:listSounds", () => listSounds());
   handle("api:fetchSound", (_e, id) => fetchSound(asString(id, "soundId", 200)));
+  handle("api:uploadSound", (_e, roomToken, name, bytes) =>
+    uploadSound(asString(roomToken, "roomToken", 4096), asString(name, "name", 260), asBytes(bytes, "bytes", 25 * 1024 * 1024)),
+  );
+  handle("api:chatHistory", (_e, roomId, roomToken) => chatHistory(parseRoomId(roomId), asString(roomToken, "roomToken", 4096)));
+  handle("api:chatUploadFile", (_e, roomId, roomToken, raw) => {
+    const f = asObject(raw, "file");
+    return chatUploadFile(parseRoomId(roomId), asString(roomToken, "roomToken", 4096), {
+      name: asString(f.name, "name", 260),
+      type: typeof f.type === "string" ? f.type.slice(0, 100) : "",
+      bytes: asBytes(f.bytes, "bytes", 25 * 1024 * 1024),
+    });
+  });
+  handle("api:chatAppend", (_e, roomId, roomToken, raw) => {
+    const m = asObject(raw, "message");
+    const attributes: Record<string, string> = {};
+    const rawAttrs = typeof m.attributes === "object" && m.attributes !== null ? (m.attributes as Record<string, unknown>) : {};
+    for (const [k, v] of Object.entries(rawAttrs).slice(0, 10)) if (typeof v === "string") attributes[k.slice(0, 64)] = v.slice(0, 256);
+    return chatAppend(parseRoomId(roomId), asString(roomToken, "roomToken", 4096), {
+      id: asString(m.id, "id", 128),
+      timestamp: asNumber(m.timestamp, "timestamp", 0, Number.MAX_SAFE_INTEGER),
+      message: typeof m.message === "string" ? m.message.slice(0, 20_000) : "",
+      attributes,
+      fileIds: Array.isArray(m.fileIds) ? m.fileIds.slice(0, 10).map((f) => asString(f, "fileId", 64)) : [],
+    });
+  });
+  handle("api:chatDelete", (_e, roomId, roomToken, messageId) =>
+    chatDelete(parseRoomId(roomId), asString(roomToken, "roomToken", 4096), asString(messageId, "messageId", 128)),
+  );
+  handle("api:chatFile", (_e, roomId, roomToken, fileId) =>
+    chatFile(parseRoomId(roomId), asString(roomToken, "roomToken", 4096), asString(fileId, "fileId", 64)),
+  );
 
   // --- captura
   handle("capture:list", () => listCaptureSources());

@@ -1,5 +1,4 @@
-import type { ReceivedChatMessage } from "@livekit/components-react";
-import { Download, FileText, ImagePlus, MessageSquare, Paperclip, Send, Smile, X } from "lucide-react";
+import { Download, FileText, ImagePlus, LoaderCircle, MessageSquare, Paperclip, Send, Smile, Trash2, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   formatBytes,
@@ -9,6 +8,7 @@ import {
   type ChatInline,
 } from "@shared/chatText";
 import { cn } from "@/lib/utils";
+import type { ChatAttachment, ChatEntry, ChatSend } from "./useRoomChat";
 
 const SEND_ERROR_MESSAGE =
   "Não foi possível enviar a mensagem. Verifique sua conexão e tente novamente.";
@@ -31,16 +31,14 @@ const EMOJIS = [
   "❤️", "🔥", "🎉", "✅", "❌", "⚠️", "💯", "⭐", "🚀", "💡", "☕", "🍕",
 ];
 
-export type ChatSend = (
-  message: string,
-  options?: { attachments?: File[]; attributes?: Record<string, string> },
-) => Promise<unknown>;
-
 interface ChatSidebarProps {
   isOpen: boolean;
   onClose: () => void;
-  chatMessages: ReceivedChatMessage[];
+  chatMessages: ChatEntry[];
   send: ChatSend;
+  /** Apaga para todos uma mensagem sua (da sala e do histórico). */
+  onDelete: (id: string) => Promise<void>;
+  loadFile: (attachment: ChatAttachment) => Promise<Blob>;
   isSending: boolean;
   /** O rascunho vive fora do painel: fechar o chat não apaga o que foi digitado. */
   draft: string;
@@ -71,12 +69,22 @@ export function ChatSidebar({
   isSending,
   draft,
   onDraftChange: setDraft,
+  onDelete,
+  loadFile,
 }: ChatSidebarProps) {
   const [sendError, setSendError] = useState<string | null>(null);
   const [pending, setPending] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [viewer, setViewer] = useState<{ url: string; name: string } | null>(null);
+  // Apagar pede um segundo clique: a lixeira vira "Apagar?" por alguns segundos.
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const t = setTimeout(() => setConfirmDelete(null), 4000);
+    return () => clearTimeout(t);
+  }, [confirmDelete]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -112,6 +120,23 @@ export function ChatSidebar({
   }, []);
 
   if (!isOpen) return null;
+
+  async function handleDelete(id: string) {
+    if (confirmDelete !== id) {
+      setConfirmDelete(id);
+      return;
+    }
+    setConfirmDelete(null);
+    setDeleting(id);
+    setSendError(null);
+    try {
+      await onDelete(id);
+    } catch (error) {
+      setSendError(error instanceof Error && error.message ? error.message : "Não foi possível apagar a mensagem.");
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   async function handleSend(event?: React.SyntheticEvent) {
     event?.preventDefault();
@@ -217,22 +242,23 @@ export function ChatSidebar({
         ) : (
           <ul aria-label="Mensagens">
             {chatMessages.map((msg, index) => {
-              // `isLocal` é a autoridade do SDK. Comparar `name`/`identity`
-              // rotularia como suas as mensagens de outra pessoa sempre que os
-              // apelidos coincidissem.
-              const isMe = msg.from?.isLocal === true;
+              // `isLocal` vem do SDK (ao vivo) ou da identidade (histórico).
+              // Comparar apelidos rotularia como suas as mensagens de outra
+              // pessoa sempre que os nomes coincidissem.
+              const isMe = msg.isLocal;
               const prev = chatMessages[index - 1];
               const grouped =
                 prev !== undefined &&
-                prev.from?.identity === msg.from?.identity &&
+                prev.fromIdentity === msg.fromIdentity &&
                 msg.timestamp - prev.timestamp < GROUP_MS;
-              const files = msg.attachedFiles ?? [];
-              const autoCaption = msg.attributes?.[AUTO_CAPTION_ATTR] === "1" && files.length > 0;
+              const files = msg.files;
+              const autoCaption = msg.attributes[AUTO_CAPTION_ATTR] === "1" && files.length > 0;
+              const asking = confirmDelete === msg.id;
               return (
                 <li
                   key={msg.id || msg.timestamp}
                   className={cn(
-                    "group/msg px-4",
+                    "group/msg relative px-4",
                     grouped ? "pt-0.5 pb-1.5" : "border-t border-rule pt-3 pb-1.5 first:border-t-0",
                     isMe && "border-l-2 border-l-signal-line",
                   )}
@@ -240,7 +266,7 @@ export function ChatSidebar({
                   {grouped ? null : (
                     <div className="flex items-baseline gap-2">
                       <span className="truncate text-[0.8125rem] font-medium text-ink">
-                        {isMe ? "Você" : msg.from?.name || "Participante"}
+                        {isMe ? "Você" : msg.fromName || "Participante"}
                       </span>
                       <span className="ml-auto shrink-0 font-mono text-[0.6875rem] text-ink-3">
                         {formatTime(msg.timestamp)}
@@ -251,7 +277,30 @@ export function ChatSidebar({
                     <MessageText text={msg.message} muted={!isMe} timestamp={grouped ? msg.timestamp : null} />
                   )}
                   {files.length > 0 ? (
-                    <Attachments files={files} onOpenImage={(url, name) => setViewer({ url, name })} />
+                    <Attachments files={files} loadFile={loadFile} onOpenImage={(url, name) => setViewer({ url, name })} />
+                  ) : null}
+                  {isMe && msg.id ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleDelete(msg.id)}
+                      disabled={deleting === msg.id}
+                      aria-label={asking ? "Confirmar: apagar mensagem para todos" : "Apagar mensagem"}
+                      title={asking ? "Clique de novo para apagar para todos" : "Apagar mensagem"}
+                      className={cn(
+                        "absolute right-2 inline-flex items-center gap-1 border px-1.5 py-0.5 text-[0.6875rem] font-semibold transition-[opacity,color,background-color] [border-radius:var(--radius-cell)]",
+                        grouped ? "top-0" : "top-2.5",
+                        asking || deleting === msg.id
+                          ? "border-alert-line bg-alert-wash text-alert opacity-100"
+                          : "border-rule bg-sheet text-ink-3 opacity-0 hover:text-alert focus-visible:opacity-100 group-hover/msg:opacity-100",
+                      )}
+                    >
+                      {deleting === msg.id ? (
+                        <LoaderCircle size={12} strokeWidth={2} aria-hidden className="animate-spin" />
+                      ) : (
+                        <Trash2 size={12} strokeWidth={1.75} aria-hidden />
+                      )}
+                      {asking ? "Apagar?" : null}
+                    </button>
                   ) : null}
                 </li>
               );
@@ -502,21 +551,109 @@ function useObjectUrl(file: Blob): string {
   return url;
 }
 
-function kindOf(file: File): "image" | "video" | "audio" | "file" {
+function kindOf(file: { type: string }): "image" | "video" | "audio" | "file" {
   if (file.type.startsWith("image/")) return "image";
   if (file.type.startsWith("video/")) return "video";
   if (file.type.startsWith("audio/")) return "audio";
   return "file";
 }
 
-function Attachments({ files, onOpenImage }: { files: File[]; onOpenImage: (url: string, name: string) => void }) {
+type LoadFile = (attachment: ChatAttachment) => Promise<Blob>;
+
+function Attachments({
+  files,
+  loadFile,
+  onOpenImage,
+}: {
+  files: ChatAttachment[];
+  loadFile: LoadFile;
+  onOpenImage: (url: string, name: string) => void;
+}) {
   return (
     <div className="mt-1.5 flex flex-col gap-1.5">
-      {files.map((file, i) => (
-        <Attachment key={`${file.name}-${i}`} file={file} onOpenImage={onOpenImage} />
-      ))}
+      {files.map((file, i) =>
+        file.file ? (
+          <Attachment key={`${file.name}-${i}`} file={file.file} onOpenImage={onOpenImage} />
+        ) : (
+          <StoredAttachment key={file.remoteId ?? i} attachment={file} loadFile={loadFile} onOpenImage={onOpenImage} />
+        ),
+      )}
     </div>
   );
+}
+
+/**
+ * Anexo do histórico: os bytes estão no servidor. Imagem baixa sozinha para
+ * aparecer; o resto só quando a pessoa pede, para entrar na sala não baixar
+ * todos os arquivos da conversa.
+ */
+function StoredAttachment({
+  attachment,
+  loadFile,
+  onOpenImage,
+}: {
+  attachment: ChatAttachment;
+  loadFile: LoadFile;
+  onOpenImage: (url: string, name: string) => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "error">("idle");
+  const name = attachment.name || "arquivo";
+  const kind = kindOf(attachment);
+
+  const load = useCallback(
+    async (thenSave: boolean) => {
+      setState("loading");
+      try {
+        const blob = await loadFile(attachment);
+        const f = new File([blob], name, { type: attachment.type });
+        setFile(f);
+        setState("idle");
+        if (thenSave) saveBlob(f, name);
+      } catch {
+        setState("error");
+      }
+    },
+    [attachment, loadFile, name],
+  );
+
+  useEffect(() => {
+    if (kind === "image") void load(false);
+  }, [kind, load]);
+
+  // Imagem, vídeo e áudio carregados viram o anexo de sempre (com player).
+  if (file && kind !== "file") return <Attachment file={file} onOpenImage={onOpenImage} />;
+  return (
+    <button
+      type="button"
+      onClick={() => (file ? saveBlob(file, name) : void load(kind === "file"))}
+      disabled={state === "loading"}
+      title={state === "error" ? "Esse arquivo não está mais disponível" : kind === "file" ? `Salvar ${name}` : `Abrir ${name}`}
+      className="flex min-w-0 items-center gap-2.5 border border-rule bg-sheet px-3 py-2 text-left text-ink transition-colors hover:border-rule-3 hover:bg-band [border-radius:var(--radius-cell)]"
+    >
+      <FileText size={18} strokeWidth={1.5} aria-hidden className="shrink-0 text-ink-3" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[0.8125rem] font-medium">{name}</span>
+        <span className="block font-mono text-[0.6875rem] text-ink-3">
+          {state === "error" ? "indisponível" : formatBytes(attachment.size)}
+        </span>
+      </span>
+      {state === "loading" ? (
+        <LoaderCircle size={15} strokeWidth={1.75} aria-hidden className="shrink-0 animate-spin text-ink-3" />
+      ) : (
+        <Download size={15} strokeWidth={1.5} aria-hidden className="shrink-0 text-ink-3" />
+      )}
+    </button>
+  );
+}
+
+function saveBlob(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function Attachment({ file, onOpenImage }: { file: File; onOpenImage: (url: string, name: string) => void }) {

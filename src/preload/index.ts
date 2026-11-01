@@ -39,6 +39,12 @@ const bridge: DesktopBridge = {
     desktopInfo: () => ipcRenderer.invoke("api:desktopInfo"),
     listSounds: () => ipcRenderer.invoke("api:listSounds"),
     fetchSound: (id) => ipcRenderer.invoke("api:fetchSound", id),
+    uploadSound: (roomToken, name, bytes) => ipcRenderer.invoke("api:uploadSound", roomToken, name, bytes),
+    chatHistory: (roomId, roomToken) => ipcRenderer.invoke("api:chatHistory", roomId, roomToken),
+    chatUploadFile: (roomId, roomToken, file) => ipcRenderer.invoke("api:chatUploadFile", roomId, roomToken, file),
+    chatAppend: (roomId, roomToken, msg) => ipcRenderer.invoke("api:chatAppend", roomId, roomToken, msg),
+    chatDelete: (roomId, roomToken, messageId) => ipcRenderer.invoke("api:chatDelete", roomId, roomToken, messageId),
+    chatFile: (roomId, roomToken, fileId) => ipcRenderer.invoke("api:chatFile", roomId, roomToken, fileId),
   },
   capture: {
     list: () => ipcRenderer.invoke("capture:list"),

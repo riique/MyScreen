@@ -1,4 +1,4 @@
-import { LoaderCircle, Music, Play, RotateCw, Square } from "lucide-react";
+import { LoaderCircle, Music, Play, RotateCw, Square, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { SoundboardState } from "./useSoundboard";
@@ -10,7 +10,8 @@ import type { SoundboardState } from "./useSoundboard";
 export function SoundboardControl({ board }: { board: SoundboardState }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const { sounds, listError, playingId, loadingId, error, refresh, play, stop } = board;
+  const fileRef = useRef<HTMLInputElement>(null);
+  const { sounds, listError, playingId, loadingId, error, refresh, play, stop, uploading, upload } = board;
 
   // A lista vem de novo a cada abertura: arquivo novo no servidor aparece sem sair da sala.
   useEffect(() => {
@@ -61,11 +62,36 @@ export function SoundboardControl({ board }: { board: SoundboardState }) {
           aria-label="Áudios"
           className="absolute bottom-full left-1/2 z-30 mb-3 flex max-h-[60vh] w-[20rem] -translate-x-1/2 flex-col border border-rule-2 bg-sheet shadow-overlay [border-radius:var(--radius-sheet)]"
         >
-          <div className="flex items-center justify-between gap-3 border-b border-rule px-4 py-3">
+          <div className="flex items-center gap-2 border-b border-rule px-4 py-3">
             <div className="min-w-0">
               <span className="block text-[0.875rem] font-semibold text-ink">Áudios</span>
               <span className="block text-[0.75rem] text-ink-3">Toca para todo mundo na sala.</span>
             </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="audio/*,.mp3,.wav,.ogg,.oga,.opus,.m4a,.aac,.flac,.webm"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) upload(file);
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading !== null}
+              title="Enviar um áudio do computador para a lista de todos"
+              className="ml-auto inline-flex shrink-0 items-center gap-1.5 border border-rule-2 px-2.5 py-1 text-[0.75rem] font-semibold text-ink transition-colors hover:border-rule-3 hover:bg-band disabled:opacity-60 [border-radius:var(--radius-cell)]"
+            >
+              {uploading ? (
+                <LoaderCircle size={12} strokeWidth={2} aria-hidden className="animate-spin" />
+              ) : (
+                <Upload size={12} strokeWidth={2} aria-hidden />
+              )}
+              {uploading ? "Enviando…" : "Importar"}
+            </button>
             {playingId ? (
               <button
                 type="button"
@@ -94,7 +120,9 @@ export function SoundboardControl({ board }: { board: SoundboardState }) {
             ) : sounds === null ? (
               <p className="px-4 py-6 text-center text-[0.8125rem] text-ink-3">Carregando…</p>
             ) : sounds.length === 0 ? (
-              <p className="px-4 py-6 text-center text-[0.8125rem] text-ink-3">Nenhum áudio no servidor ainda.</p>
+              <p className="px-4 py-6 text-center text-[0.8125rem] text-ink-3">
+                Nenhum áudio no servidor ainda. Use “Importar” para mandar um do computador.
+              </p>
             ) : (
               <ul aria-label="Áudios do servidor">
                 {sounds.map((s) => {

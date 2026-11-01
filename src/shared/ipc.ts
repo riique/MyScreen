@@ -89,6 +89,25 @@ export interface SoundInfo {
   size: number;
 }
 
+/** Um anexo guardado no histórico do chat da sala. */
+export interface ChatFileInfo {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+}
+
+/** Uma mensagem do histórico do chat da sala, como o servidor guardou. */
+export interface StoredChatMessage {
+  id: string;
+  timestamp: number;
+  message: string;
+  attributes: Record<string, string>;
+  fromIdentity: string;
+  fromName: string;
+  files: ChatFileInfo[];
+}
+
 export interface RoomState {
   inRoom: boolean;
   micOn: boolean;
@@ -201,6 +220,22 @@ export interface DesktopBridge {
     listSounds(): Promise<ApiResult<SoundInfo[]>>;
     /** Bytes de um áudio da lista, para decodificar e tocar. */
     fetchSound(id: string): Promise<ApiResult<Uint8Array>>;
+    /** Manda um áudio do computador para a lista do servidor (token da sala como prova). */
+    uploadSound(roomToken: string, name: string, bytes: Uint8Array): Promise<ApiResult<SoundInfo>>;
+    /** Histórico do chat da sala, guardado no servidor. */
+    chatHistory(roomId: string, roomToken: string): Promise<ApiResult<StoredChatMessage[]>>;
+    chatUploadFile(
+      roomId: string,
+      roomToken: string,
+      file: { name: string; type: string; bytes: Uint8Array },
+    ): Promise<ApiResult<ChatFileInfo>>;
+    chatAppend(
+      roomId: string,
+      roomToken: string,
+      msg: { id: string; timestamp: number; message: string; attributes: Record<string, string>; fileIds: string[] },
+    ): Promise<ApiResult<null>>;
+    chatDelete(roomId: string, roomToken: string, messageId: string): Promise<ApiResult<null>>;
+    chatFile(roomId: string, roomToken: string, fileId: string): Promise<ApiResult<Uint8Array>>;
   };
   capture: {
     list(): Promise<CaptureSource[]>;

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AudioPresets, LocalAudioTrack, Track, type Room } from "livekit-client";
+import { AudioPresets, LocalAudioTrack, RoomEvent, Track, type Room } from "livekit-client";
 import type { SoundInfo } from "@shared/ipc";
 
 /** Nome da trilha no SFU: quem grava ou lista trilhas reconhece o áudio por ela. */
 export const SOUNDBOARD_TRACK_NAME = "soundboard";
+/** Aviso na sala de que a lista do servidor mudou: quem está com ela aberta recarrega. */
+const SOUNDS_CHANGED_TOPIC = "myscreen.sounds.changed";
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 export interface SoundboardState {
   sounds: SoundInfo[] | null;
@@ -15,6 +18,9 @@ export interface SoundboardState {
   refresh: () => void;
   play: (sound: SoundInfo) => void;
   stop: () => void;
+  /** Áudio do computador sendo enviado ao servidor (nome), ou null. */
+  uploading: string | null;
+  upload: (file: File) => void;
 }
 
 /**
@@ -24,12 +30,15 @@ export interface SoundboardState {
  * ligado, em qualquer versão) e no site. Quem tocou escuta pela saída da
  * chamada, sem a volta pelo SFU.
  */
-export function useSoundboard(room: Room): SoundboardState {
+export function useSoundboard(room: Room, roomToken: string): SoundboardState {
   const [sounds, setSounds] = useState<SoundInfo[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState<string | null>(null);
+  const tokenRef = useRef(roomToken);
+  tokenRef.current = roomToken;
 
   const ctxRef = useRef<AudioContext | null>(null);
   const buffers = useRef(new Map<string, AudioBuffer>());
@@ -179,6 +188,46 @@ export function useSoundboard(room: Room): SoundboardState {
     [context, output, stopSource, unpublish],
   );
 
+  const upload = useCallback(
+    (file: File) => {
+      setError(null);
+      if (file.size === 0) return setError("O arquivo está vazio.");
+      if (file.size > MAX_UPLOAD_BYTES) return setError("Áudio grande demais. O limite é 25 MB.");
+      setUploading(file.name);
+      void (async () => {
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const r = await window.myscreen.api.uploadSound(tokenRef.current, file.name, bytes);
+          if (disposed.current) return;
+          if (!r.ok) throw new Error(r.error);
+          refresh();
+          // Os outros não precisam esperar reabrir o painel para ver o áudio novo.
+          void room.localParticipant
+            .publishData(new TextEncoder().encode(r.data.id), { reliable: true, topic: SOUNDS_CHANGED_TOPIC })
+            .catch(() => {});
+        } catch (err) {
+          if (!disposed.current) setError(err instanceof Error && err.message ? err.message : "Não foi possível enviar o áudio.");
+        } finally {
+          if (!disposed.current) setUploading(null);
+        }
+      })();
+    },
+    [refresh, room],
+  );
+
+  // Alguém mandou um áudio: a lista já carregada se atualiza sozinha.
+  const loaded = sounds !== null;
+  useEffect(() => {
+    if (!loaded) return;
+    const onData = (_payload: Uint8Array, _p?: unknown, _k?: unknown, topic?: string) => {
+      if (topic === SOUNDS_CHANGED_TOPIC) refresh();
+    };
+    room.on(RoomEvent.DataReceived, onData);
+    return () => {
+      room.off(RoomEvent.DataReceived, onData);
+    };
+  }, [room, loaded, refresh]);
+
   useEffect(() => {
     disposed.current = false;
     return () => {
@@ -191,5 +240,5 @@ export function useSoundboard(room: Room): SoundboardState {
     };
   }, [stopSource, unpublish]);
 
-  return { sounds, listError, playingId, loadingId, error, refresh, play, stop };
+  return { sounds, listError, playingId, loadingId, error, refresh, play, stop, uploading, upload };
 }

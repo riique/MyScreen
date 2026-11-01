@@ -134,6 +134,29 @@ export function openChatLink(raw: string): void {
   void shell.openExternal(url.href);
 }
 
+const keepOnTop = new WeakMap<BrowserWindow, () => void>();
+
+/**
+ * "Sempre no topo" de verdade, inclusive sobre jogo em janela ou tela cheia
+ * sem bordas. Um jogo que também se põe no topo passa na frente ao ganhar o
+ * foco; por isso, a cada perda de foco a janela reafirma o topo. Tela cheia
+ * EXCLUSIVA (DirectX) não deixa nenhuma janela por cima — isso é do Windows.
+ */
+function setPinnedOnTop(win: BrowserWindow, on: boolean): void {
+  const prev = keepOnTop.get(win);
+  if (prev) win.off("blur", prev);
+  keepOnTop.delete(win);
+  win.setAlwaysOnTop(on, "screen-saver");
+  if (!on) return;
+  const reassert = () => {
+    if (win.isDestroyed() || !win.isAlwaysOnTop()) return;
+    win.setAlwaysOnTop(true, "screen-saver");
+    win.moveTop();
+  };
+  win.on("blur", reassert);
+  keepOnTop.set(win, reassert);
+}
+
 function popoutMenu(win: BrowserWindow): Menu {
   const displays = screen.getAllDisplays();
   return Menu.buildFromTemplate([
@@ -141,7 +164,7 @@ function popoutMenu(win: BrowserWindow): Menu {
       label: "Sempre no topo",
       type: "checkbox",
       checked: win.isAlwaysOnTop(),
-      click: (item) => win.setAlwaysOnTop(item.checked, "floating"),
+      click: (item) => setPinnedOnTop(win, item.checked),
     },
     {
       label: "Mover para o monitor",
