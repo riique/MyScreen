@@ -21,7 +21,18 @@
 	# Limite de corpo. Sem isso um POST gigante para /api/rooms e consumido
 	# inteiro em memoria antes de chegar no handler. O menor payload legitimo
 	# (cadastro) tem bem menos que 16 KB.
-	request_body {
+	# Os uploads (áudio da chamada e anexo do chat, até 25 MB cada) têm teto
+	# próprio; o resto continua em 16 KB.
+	@uploads path /api/sounds /api/rooms/*/chat/files
+	request_body @uploads {
+		max_size 26MB
+	}
+	@chat path /api/rooms/*/chat
+	request_body @chat {
+		max_size 256KB
+	}
+	@small not path /api/sounds /api/rooms/*/chat /api/rooms/*/chat/files
+	request_body @small {
 		max_size 16KB
 	}
 

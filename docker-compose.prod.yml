@@ -71,8 +71,13 @@ services:
     volumes:
       - app-data:/app/data
       # Áudios que podem ser tocados nas chamadas (`/api/sounds`). Basta copiar
-      # o arquivo para esta pasta do host: vale na hora, sem rebuild.
-      - /opt/myscreen/sounds:/app/sounds:ro
+      # o arquivo para esta pasta do host: vale na hora, sem rebuild. Quem
+      # está numa sala também manda áudios pelo app (POST), então a pasta é
+      # gravável — no host ela precisa ser do uid 1001 (`nextjs`):
+      #   sudo chown -R 1001:1001 /opt/myscreen/sounds
+      # O histórico do chat (mensagens e anexos) mora em /app/data/chat, no
+      # mesmo volume do banco.
+      - /opt/myscreen/sounds:/app/sounds
     depends_on:
       migrate:
         condition: service_completed_successfully
