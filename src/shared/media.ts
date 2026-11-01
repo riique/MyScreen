@@ -15,8 +15,8 @@ export const SCREEN_BITRATE: Record<ScreenResolution, number> = {
   "1440p": 12_000_000,
 };
 
-/** Teto da câmera (camada de 1080p). */
-export const CAMERA_BITRATE = 5_000_000;
+/** Teto da câmera (camada de 720p). */
+export const CAMERA_BITRATE = 2_500_000;
 
 export function screenBitrate(resolution: ScreenResolution, fps: number): number {
   const factor = fps >= 60 ? 1.5 : 1;

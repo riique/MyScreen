@@ -37,6 +37,10 @@ if (inputHelper) {
   // O Chromium usa o Windows Graphics Capture quando disponível (60 FPS
   // estáveis, janela por trás de outras). Pedir explicitamente não custa nada.
   app.commandLine.appendSwitch("enable-features", "AllowWgcScreenCapturer,AllowWgcWindowCapturer");
+  // A captura da webcam pelo Media Foundation com texturas D3D11 derrubou o
+  // driver AMD (timeout/TDR) ao ligar a câmera; a cópia em memória de sistema
+  // custa pouco e evita o caminho que trava.
+  app.commandLine.appendSwitch("disable-features", "MediaFoundationD3D11VideoCapture");
 
   app.on("second-instance", (_event, argv) => {
     showMainWindow();

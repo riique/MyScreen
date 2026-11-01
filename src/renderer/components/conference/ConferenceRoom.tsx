@@ -202,12 +202,13 @@ export function ConferenceRoom({
           webAudioMix: true,
           stopLocalTrackOnUnpublish: true,
           ...(mediaPrefs.audioOutputId ? { audioOutput: { deviceId: mediaPrefs.audioOutputId } } : {}),
-          videoCaptureDefaults: { resolution: VideoPresets.h1080.resolution },
+          videoCaptureDefaults: { resolution: VideoPresets.h720.resolution },
           publishDefaults: {
             videoEncoding: { maxBitrate: CAMERA_BITRATE, maxFramerate: 30, priority: "high" },
-            // Camadas da câmera em 1080p, 720p e 360p: com a rede apertada, quem
-            // assiste desce um degrau em vez de ficar sem quadro.
-            videoSimulcastLayers: [VideoPresets.h360, VideoPresets.h720],
+            // Camadas da câmera em 720p e 360p: com a rede apertada, quem
+            // assiste desce um degrau em vez de ficar sem quadro. Duas camadas
+            // (e não três) mantêm leve o encode ao ligar a câmera.
+            videoSimulcastLayers: [VideoPresets.h360],
             screenShareEncoding: {
               maxBitrate: SCREEN_BITRATE["1080p"],
               maxFramerate: 30,
