@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AudioPresets, LocalAudioTrack, RoomEvent, Track, type Room } from "livekit-client";
+import {
+  AudioPresets,
+  LocalAudioTrack,
+  RoomEvent,
+  Track,
+  type LocalTrackPublication,
+  type Room,
+} from "livekit-client";
 import type { SoundInfo } from "@shared/ipc";
 
 /** Nome da trilha no SFU: quem grava ou lista trilhas reconhece o áudio por ela. */
@@ -7,6 +14,18 @@ export const SOUNDBOARD_TRACK_NAME = "soundboard";
 /** Aviso na sala de que a lista do servidor mudou: quem está com ela aberta recarrega. */
 const SOUNDS_CHANGED_TOPIC = "myscreen.sounds.changed";
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+/**
+ * A trilha fica publicada um tempo depois do som acabar: o próximo áudio sai
+ * na hora, sem publicar de novo e sem esperar os outros assinarem.
+ */
+const LINGER_MS = 45_000;
+/**
+ * Trilha recém-publicada: quem está na sala ainda não assinou e perderia o
+ * começo do som. Espera a primeira assinatura, mas não mais que isso.
+ */
+const SUBSCRIBE_WAIT_MS = 1500;
+
+type Output = { gain: GainNode; dest: MediaStreamAudioDestinationNode; track: LocalAudioTrack };
 
 export interface SoundboardState {
   sounds: SoundInfo[] | null;
@@ -43,7 +62,10 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
   const ctxRef = useRef<AudioContext | null>(null);
   const buffers = useRef(new Map<string, AudioBuffer>());
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const outRef = useRef<{ gain: GainNode; dest: MediaStreamAudioDestinationNode; track: LocalAudioTrack } | null>(null);
+  const outRef = useRef<Output | null>(null);
+  // Publicação em andamento: dois cliques seguidos esperam a mesma.
+  const outPending = useRef<{ out: Output; promise: Promise<Output> } | null>(null);
+  const lingerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Cada clique invalida o anterior: um download lento não toca por cima.
   const playSeq = useRef(0);
   const disposed = useRef(false);
@@ -57,16 +79,29 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
     });
   }, []);
 
+  const cancelLinger = useCallback(() => {
+    if (lingerTimer.current) clearTimeout(lingerTimer.current);
+    lingerTimer.current = null;
+  }, []);
+
   const unpublish = useCallback(() => {
+    cancelLinger();
     const out = outRef.current;
     outRef.current = null;
+    outPending.current = null;
     if (!out) return;
     out.gain.disconnect();
     if (room.localParticipant.getTrackPublication(Track.Source.Unknown)?.track === out.track) {
       void room.localParticipant.unpublishTrack(out.track).catch(() => {});
     }
     out.track.stop();
-  }, [room]);
+  }, [room, cancelLinger]);
+
+  // Sem som por um tempo, sem trilha: ninguém fica com um "participante" mudo publicado.
+  const unpublishLater = useCallback(() => {
+    cancelLinger();
+    lingerTimer.current = setTimeout(unpublish, LINGER_MS);
+  }, [cancelLinger, unpublish]);
 
   const stopSource = useCallback(() => {
     const src = sourceRef.current;
@@ -84,10 +119,10 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
   const stop = useCallback(() => {
     playSeq.current += 1;
     stopSource();
-    unpublish();
+    if (outRef.current || outPending.current) unpublishLater();
     setPlayingId(null);
     setLoadingId(null);
-  }, [stopSource, unpublish]);
+  }, [stopSource, unpublishLater]);
 
   const context = useCallback(async (): Promise<AudioContext> => {
     let ctx = ctxRef.current;
@@ -105,34 +140,70 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
     return ctx;
   }, [room]);
 
+  /** Espera alguém assinar a trilha nova, até SUBSCRIBE_WAIT_MS. Sala vazia: não espera. */
+  const firstSubscriber = useCallback(
+    (track: LocalAudioTrack) =>
+      new Promise<void>((resolve) => {
+        if (room.remoteParticipants.size === 0) return resolve();
+        const done = () => {
+          clearTimeout(timer);
+          room.off(RoomEvent.LocalTrackSubscribed, onSub);
+          resolve();
+        };
+        const onSub = (pub: LocalTrackPublication) => {
+          if (pub.track === track) done();
+        };
+        const timer = setTimeout(done, SUBSCRIBE_WAIT_MS);
+        room.on(RoomEvent.LocalTrackSubscribed, onSub);
+      }),
+    [room],
+  );
+
   const output = useCallback(
-    async (ctx: AudioContext) => {
-      if (outRef.current) return outRef.current;
+    (ctx: AudioContext): Promise<Output> => {
+      cancelLinger();
+      if (outRef.current) return Promise.resolve(outRef.current);
+      if (outPending.current) return outPending.current.promise;
       const gain = ctx.createGain();
       const dest = ctx.createMediaStreamDestination();
       gain.connect(dest);
       gain.connect(ctx.destination);
       const track = new LocalAudioTrack(dest.stream.getAudioTracks()[0], undefined, true);
       const out = { gain, dest, track };
-      outRef.current = out;
-      try {
-        await room.localParticipant.publishTrack(track, {
-          source: Track.Source.Unknown,
-          name: SOUNDBOARD_TRACK_NAME,
-          audioPreset: AudioPresets.musicHighQualityStereo,
-          forceStereo: true,
-          dtx: false,
-          red: false,
-        });
-      } catch (err) {
-        if (outRef.current === out) outRef.current = null;
-        gain.disconnect();
-        track.stop();
-        throw err;
-      }
-      return out;
+      const pending = (async () => {
+        try {
+          // Escuta antes de publicar: a assinatura pode chegar antes do publishTrack voltar.
+          const subscribed = firstSubscriber(track);
+          await room.localParticipant.publishTrack(track, {
+            source: Track.Source.Unknown,
+            name: SOUNDBOARD_TRACK_NAME,
+            audioPreset: AudioPresets.musicHighQualityStereo,
+            forceStereo: true,
+            dtx: false,
+            red: false,
+          });
+          await subscribed;
+        } catch (err) {
+          if (outPending.current?.out === out) outPending.current = null;
+          gain.disconnect();
+          track.stop();
+          throw err;
+        }
+        if (outPending.current?.out !== out) {
+          // Desistiram (stop/desmontagem) enquanto publicava.
+          gain.disconnect();
+          void room.localParticipant.unpublishTrack(track).catch(() => {});
+          track.stop();
+          throw new Error("cancelado");
+        }
+        outPending.current = null;
+        outRef.current = out;
+        return out;
+      })();
+      outPending.current = { out, promise: pending };
+      return pending;
     },
-    [room],
+    [room, cancelLinger, firstSubscriber],
   );
 
   const play = useCallback(
@@ -145,6 +216,9 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
       void (async () => {
         try {
           const ctx = await context();
+          // Publica enquanto baixa: as duas esperas correm juntas, não uma depois da outra.
+          const outP = output(ctx);
+          outP.catch(() => {});
           let buffer = buffers.current.get(sound.id);
           if (!buffer) {
             const r = await window.myscreen.api.fetchSound(sound.id);
@@ -154,7 +228,7 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
             buffers.current.set(sound.id, buffer);
           }
           if (seq !== playSeq.current || disposed.current) return;
-          const out = await output(ctx);
+          const out = await outP;
           if (seq !== playSeq.current || disposed.current) return;
           const src = ctx.createBufferSource();
           src.buffer = buffer;
@@ -164,8 +238,7 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
             sourceRef.current = null;
             src.disconnect();
             setPlayingId(null);
-            // Sem som, sem trilha: ninguém fica com um "participante" mudo publicado.
-            unpublish();
+            unpublishLater();
           };
           sourceRef.current = src;
           src.start();
@@ -185,7 +258,7 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
         }
       })();
     },
-    [context, output, stopSource, unpublish],
+    [context, output, stopSource, unpublish, unpublishLater],
   );
 
   const upload = useCallback(
