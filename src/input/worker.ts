@@ -20,7 +20,7 @@ type Command =
   | { type: "hook"; on: boolean }
   /** Lado controlado: avisa quando a dona do PC mexe no mouse de verdade. */
   | { type: "localWatch"; on: boolean }
-  | { type: "elevate"; exe: string; args: string; hwnd: number };
+  | { type: "elevate"; exe: string; args: string; hwnd: number; wait: boolean };
 
 const parent = process.parentPort;
 
@@ -74,12 +74,12 @@ function check(cmd: InjectCommand): void {
 }
 
 /** Pede o UAC para subir o auxiliar elevado. Fora da thread do JS: o UAC espera a pessoa. */
-function elevate(exe: string, args: string, hwnd: number): void {
+function elevate(exe: string, args: string, hwnd: number, wait: boolean): void {
   if (!native) {
     parent.postMessage({ type: "elevate", ok: false, error: loadError ?? "módulo nativo indisponível" });
     return;
   }
-  native.runElevated(exe, args, hwnd).then(
+  native.runElevated(exe, args, hwnd, wait).then(
     (ok) => parent.postMessage({ type: "elevate", ok, error: null }),
     (error: unknown) =>
       parent.postMessage({ type: "elevate", ok: false, error: error instanceof Error ? error.message : String(error) }),
@@ -150,6 +150,7 @@ parent.on("message", (event) => {
       parent.postMessage({
         type: "probe", ok: dryRun || injector !== null, error: loadError,
         uacPath: native?.uacServicePath?.() ?? null,
+        powershellPath: native?.systemPowershellPath?.() ?? null,
       });
       break;
     case "inject":
@@ -171,7 +172,7 @@ parent.on("message", (event) => {
       setLocalWatch(cmd.on);
       break;
     case "elevate":
-      elevate(cmd.exe, cmd.args, cmd.hwnd);
+      elevate(cmd.exe, cmd.args, cmd.hwnd, cmd.wait);
       break;
   }
 });

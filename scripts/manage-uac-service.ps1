@@ -8,12 +8,19 @@ param(
     [ValidatePattern('^[0-9A-Fa-f]{64}$')]
     [string] $ExpectedSha256,
 
+    [Parameter(ParameterSetName = 'Install')]
+    [switch] $EnsureInstalled,
+
     [Parameter(Mandatory, ParameterSetName = 'Remove')]
     [switch] $Remove
 )
 
 $ErrorActionPreference = 'Stop'
 if (-not [Environment]::Is64BitProcess) { throw 'Execute este script no PowerShell de 64 bits.' }
+$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Execute este script como administrador.'
+}
 
 $serviceName = 'MyScreenUac'
 $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
@@ -84,6 +91,12 @@ if ($Remove) {
 $sourceFile = Get-Item -LiteralPath $Source
 if ($sourceFile.PSIsContainer -or $sourceFile.FullName -eq $exe) { throw 'Selecione o executável do pacote de distribuição.' }
 if (-not $PSCmdlet.ShouldProcess($destination, 'Instalar ou atualizar serviço')) { return }
+
+if ($EnsureInstalled -and $existing -and (Test-Path -LiteralPath $exe) -and
+    (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -eq $ExpectedSha256) {
+    if ((Get-Service -Name $serviceName).Status -ne 'Running') { Start-MyScreenService }
+    return
+}
 
 if (-not (Test-Path -LiteralPath $destination)) {
     New-Item -Path $destination -ItemType Directory | Out-Null

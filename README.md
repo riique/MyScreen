@@ -37,9 +37,9 @@ ControlOverlay → rc.in (data channel) → renderer → IPC → main: RemoteGat
 - Só tela inteira (não janela). O navegador pode ser controlado? Não — só o app de Windows.
 - Janelas de administrador (UIPI): a pessoa controlada clica em **Liberar** na sala (avisada por notificação) e
   aceita o UAC; um auxiliar elevado passa a injetar o input até o app fechar.
-- **Responder ao UAC**: com o serviço opcional instalado no PC controlado, quem controla pode clicar
-  no escudo **Solicitar acesso administrativo**. A pessoa no PC confirma a autorização para aquela
-  sessão. Os avisos de consentimento seguintes aparecem em vídeo privado e aceitam clique remoto.
+- **Responder ao UAC**: quem controla clica no escudo **Solicitar acesso administrativo**.
+  A pessoa no PC controlado escolhe **Preparar e permitir** e confirma o UAC localmente. O MyScreen
+  instala ou atualiza o serviço quando necessário. Os avisos seguintes aparecem em vídeo privado.
   [Instalação, escopo e teste manual](CONTROLE-REMOTO.md#acesso-administrativo-uac).
 - A tela de bloqueio e `Ctrl+Alt+Del` ficam sob controle local. O layout de teclado que vale é o do
   PC controlado ("Enviar texto" para layouts diferentes).

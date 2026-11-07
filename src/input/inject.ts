@@ -24,8 +24,9 @@ export type Native = {
   stopKeyboardHook(): void;
   startMouseWatch(onLocal: () => void): void;
   stopMouseWatch(): void;
-  runElevated(exe: string, args: string, hwnd: number): Promise<boolean>;
+  runElevated(exe: string, args: string, hwnd: number, wait?: boolean): Promise<boolean>;
   uacServicePath?(): string | null;
+  systemPowershellPath?(): string | null;
   connectParentPipe(path: string, serverPid: number, onLine: (line: string) => void): void;
 };
 

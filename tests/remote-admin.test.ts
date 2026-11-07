@@ -33,11 +33,10 @@ it("recusar no PC controlado encerra o pedido sem elevar", async () => {
   const send = vi.fn();
   const authorize = vi.fn();
   const admin = new RemoteAdmin({
-    executable: () => "myscreen-uac.exe",
+    authorization: () => ({ setup: true, run: authorize }),
     window: () => window,
     showWindow: vi.fn(),
     allowed: () => true,
-    authorize,
     releaseInput: vi.fn(),
     send,
     emit: vi.fn(),
@@ -45,6 +44,9 @@ it("recusar no PC controlado encerra o pedido sem elevar", async () => {
   admin.handle(controller, request);
   await vi.waitFor(() => expect(send).toHaveBeenLastCalledWith("ana", { t: "admin-status", sessionId, status: "refused" }));
   expect(authorize).not.toHaveBeenCalled();
+  expect(dialog.showMessageBox).toHaveBeenLastCalledWith(window, expect.objectContaining({
+    buttons: ["Recusar", "Preparar e permitir"], defaultId: 0,
+  }));
   expect(admin.blocksInput).toBe(false);
 });
 
@@ -55,15 +57,16 @@ it.skipIf(process.platform !== "win32")("autentica o worker e só encaminha cliq
   const commands: Buffer[] = [];
   const sockets: net.Socket[] = [];
   const admin = new RemoteAdmin({
-    executable: () => "myscreen-uac.exe",
+    authorization: () => ({ setup: true, run: authorize }),
     window: () => window,
     showWindow: vi.fn(),
     allowed: (peer, id) => peer.sid === controller.sid && id === sessionId,
     releaseInput: vi.fn(),
     send: (_, msg) => messages.push(msg),
     emit: (event) => events.push(event),
-    authorize: async (_, args) => {
-      const nonce = args.split(" ").at(-1)!;
+  });
+  async function authorize(pid: number, nonce: string) {
+      expect(pid).toBe(process.pid);
       const path = "\\\\.\\pipe\\myscreen-uac-" + nonce.slice(0, 32);
       const fake = await connect(path);
       sockets.push(fake);
@@ -84,8 +87,7 @@ it.skipIf(process.platform !== "win32")("autentica o worker e só encaminha cliq
       worker.write(hello.subarray(0, 2));
       worker.write(Buffer.concat([hello.subarray(2), packet(Buffer.from([1])), packet(Buffer.concat([frame, rgba]))]));
       return true;
-    },
-  });
+  }
   try {
     admin.handle(controller, request);
     await vi.waitFor(() => expect(events.at(-1)?.t).toBe("frame"));

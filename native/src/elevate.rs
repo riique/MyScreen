@@ -10,11 +10,12 @@ pub mod sys {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, ERROR_CANCELLED, ERROR_PIPE_BUSY, GENERIC_READ, HANDLE, HWND,
-        INVALID_HANDLE_VALUE,
+        INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::Storage::FileSystem::{CreateFileW, ReadFile, OPEN_EXISTING};
     use windows_sys::Win32::System::Pipes::{GetNamedPipeServerProcessId, WaitNamedPipeW};
-    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
     fn wide(s: &str) -> Vec<u16> {
@@ -23,21 +24,42 @@ pub mod sys {
 
     /// Roda `exe args` como administrador (pede o UAC, dono `hwnd`).
     /// Ok(false): a pessoa recusou.
-    pub fn run_as_admin(exe: &str, args: &str, hwnd: isize) -> Result<bool, String> {
+    pub fn run_as_admin(exe: &str, args: &str, hwnd: isize, wait: bool) -> Result<bool, String> {
         let verb = wide("runas");
         let file = wide(exe);
         let params = wide(args);
+        let directory = wait.then(|| std::path::Path::new(exe).parent())
+            .flatten().map(|parent| wide(&parent.to_string_lossy()));
         unsafe {
             let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
             info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
             info.fMask = SEE_MASK_NOASYNC;
+            if wait {
+                info.fMask |= SEE_MASK_NOCLOSEPROCESS;
+            }
             info.hwnd = hwnd as HWND;
             info.lpVerb = verb.as_ptr();
             info.lpFile = file.as_ptr();
             info.lpParameters = params.as_ptr();
+            if let Some(directory) = &directory {
+                info.lpDirectory = directory.as_ptr();
+            }
             info.nShow = SW_HIDE;
             if ShellExecuteExW(&mut info) != 0 {
-                return Ok(true);
+                if !wait {
+                    return Ok(true);
+                }
+                if info.hProcess.is_null() {
+                    return Err("O instalador do UAC não iniciou.".into());
+                }
+                let mut code = 0;
+                let finished = WaitForSingleObject(info.hProcess, 45_000) == WAIT_OBJECT_0
+                    && GetExitCodeProcess(info.hProcess, &mut code) != 0;
+                CloseHandle(info.hProcess);
+                if !finished {
+                    return Err("O instalador do UAC não concluiu.".into());
+                }
+                return if code == 0 { Ok(true) } else { Err(format!("O instalador do UAC saiu com código {code}.")) };
             }
             match GetLastError() {
                 ERROR_CANCELLED => Ok(false),

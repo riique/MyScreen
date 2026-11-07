@@ -25,6 +25,7 @@ import { readRichClipboard, writeClipboardFiles, writeClipboardImage } from "./r
 import { RemoteGate, type HostShare, type InjectCommand, type SessionInfo } from "./remoteGate";
 import { asBoolean, asObject, asString, assertAppSender } from "./security";
 import { getSettings } from "./settings";
+import { uacSetupArgs } from "./uacSetup";
 import { getMainWindow, getSharing, onSharingChanged, showMainWindow } from "./windows";
 
 /**
@@ -37,7 +38,7 @@ import { getMainWindow, getSharing, onSharingChanged, showMainWindow } from "./w
 export const PANIC_SHORTCUT = "Control+Alt+Shift+S";
 
 type WorkerMessage =
-  | { type: "probe"; ok: boolean; error: string | null; uacPath: string | null }
+  | { type: "probe"; ok: boolean; error: string | null; uacPath: string | null; powershellPath: string | null }
   | { type: "elevated"; on: boolean }
   | { type: "error"; message: string }
   | { type: "blocked" }
@@ -59,6 +60,9 @@ let onElevate: ((msg: WorkerMessage & { type: "elevate" }) => void) | null = nul
 
 const DRY_RUN = process.env.MYSCREEN_INPUT_DRYRUN === "1";
 let uacPath: string | null = null;
+let powershellPath: string | null = null;
+declare const __MYSCREEN_UAC_SHA256__: string | null;
+declare const __MYSCREEN_UAC_SCRIPT__: string;
 
 function sendToMain(channel: string, ...args: unknown[]): void {
   const win = getMainWindow();
@@ -76,6 +80,7 @@ function ensureChild(): UtilityProcess {
     switch (msg.type) {
       case "probe":
         uacPath = msg.uacPath;
+        powershellPath = msg.powershellPath;
         onProbe?.(msg);
         onProbe = null;
         break;
@@ -196,7 +201,7 @@ const gate: RemoteGate = new RemoteGate({
   randomId,
   share: currentShare,
   acceptsRequests: () => (available && !getSettings().remoteControlDisabled ? { ok: true } : { ok: false, reason: "disabled" }),
-  supportsAdmin: () => uacPath !== null,
+  supportsAdmin: () => adminAuthorization() !== null,
   appFocused: () => BrowserWindow.getFocusedWindow() !== null,
   send: (to: string, msg: Ctl) => sendToMain("remote:send", to, msg),
   // Com o auxiliar elevado, o comando passa antes pelo utility (zona
@@ -214,15 +219,35 @@ const gate: RemoteGate = new RemoteGate({
 });
 
 const admin = new RemoteAdmin({
-  executable: () => uacPath,
+  authorization: adminAuthorization,
   window: getMainWindow,
   showWindow: showMainWindow,
-  authorize: launchElevated,
   allowed: (peer, sessionId) => gate.canUseAdmin(peer, sessionId),
   releaseInput: () => gate.releaseForDesktopSwitch(),
   send: (to, msg) => sendToMain("remote:send", to, msg),
   emit: (event) => sendToMain("remote:admin", event),
 });
+
+function adminAuthorization() {
+  if (DRY_RUN) return null;
+  const sha256 = __MYSCREEN_UAC_SHA256__;
+  const powershell = powershellPath;
+  if (app.isPackaged && powershell && sha256) {
+    const source = path.join(process.resourcesPath, "myscreen-uac.exe");
+    if (existsSync(source)) {
+      return {
+        setup: true,
+        run: (pid: number, nonce: string, hwnd: number) =>
+          launchElevated(powershell, uacSetupArgs(__MYSCREEN_UAC_SCRIPT__, source, sha256, pid, nonce), hwnd, true),
+      };
+    }
+  }
+  const installed = uacPath;
+  return installed && existsSync(installed) ? {
+    setup: false,
+    run: (pid: number, nonce: string, hwnd: number) => launchElevated(installed, "--authorize " + pid + " " + nonce, hwnd),
+  } : null;
+}
 
 // ---------------------------------------------------------------- janelas de administrador
 
@@ -290,12 +315,12 @@ async function elevateInput(): Promise<boolean> {
   }
 }
 
-async function launchElevated(exe: string, args: string, hwnd: number): Promise<boolean> {
+async function launchElevated(exe: string, args: string, hwnd: number, wait = false): Promise<boolean> {
   if (!child || DRY_RUN || onElevate) return false;
   const reply = new Promise<WorkerMessage & { type: "elevate" }>((resolve) => { onElevate = resolve; });
-  child.postMessage({ type: "elevate", exe, args, hwnd });
+  child.postMessage({ type: "elevate", exe, args, hwnd, wait });
   const result = await reply;
-  if (result.error) console.warn("Auxiliar elevado:", result.error);
+  if (result.error) throw new Error(result.error);
   return result.ok;
 }
 

@@ -375,6 +375,7 @@ pub struct ElevateTask {
     exe: String,
     args: String,
     hwnd: i64,
+    wait: bool,
 }
 
 impl Task for ElevateTask {
@@ -382,7 +383,7 @@ impl Task for ElevateTask {
     type JsValue = bool;
 
     fn compute(&mut self) -> Result<bool> {
-        elevate::sys::run_as_admin(&self.exe, &self.args, self.hwnd as isize).map_err(Error::from_reason)
+        elevate::sys::run_as_admin(&self.exe, &self.args, self.hwnd as isize, self.wait).map_err(Error::from_reason)
     }
 
     fn resolve(&mut self, _env: Env, output: bool) -> Result<bool> {
@@ -393,8 +394,22 @@ impl Task for ElevateTask {
 /// Roda `exe args` como administrador, com o UAC preso à janela `hwnd`.
 /// Resolve `false` se a pessoa recusou. Não trava a thread do JS.
 #[napi]
-pub fn run_elevated(exe: String, args: String, hwnd: i64) -> AsyncTask<ElevateTask> {
-    AsyncTask::new(ElevateTask { exe, args, hwnd })
+pub fn run_elevated(exe: String, args: String, hwnd: i64, wait: Option<bool>) -> AsyncTask<ElevateTask> {
+    AsyncTask::new(ElevateTask { exe, args, hwnd, wait: wait.unwrap_or(false) })
+}
+
+#[cfg(windows)]
+#[napi]
+pub fn system_powershell_path() -> Option<String> {
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+    let mut path = [0u16; 1024];
+    let len = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
+    if len == 0 || len >= path.len() {
+        return None;
+    }
+    let system = String::from_utf16_lossy(&path[..len]);
+    let exe = std::path::Path::new(&system).join(r"WindowsPowerShell\v1.0\powershell.exe");
+    exe.is_file().then(|| exe.to_string_lossy().into_owned())
 }
 
 #[cfg(windows)]

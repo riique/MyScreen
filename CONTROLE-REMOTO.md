@@ -675,21 +675,27 @@ Saída: notas com o que foi medido, ajustes neste documento.
 
 ## Acesso administrativo (UAC)
 
-### Instalação no computador controlado
+### Preparo automático no computador controlado
 
-O pacote Windows inclui o componente opcional myscreen-uac.exe ao lado de MyScreen.exe e o
-script resources\manage-uac-service.ps1. A instalação aceita o executável sem assinatura.
-O script requer PowerShell de 64 bits aberto como administrador e confere o SHA-256 do auxiliar
-contra o hash publicado na release do GitHub. Use o pacote e o hash da mesma versão.
+Na versão instalada do MyScreen, aceitar **Preparar e permitir** abre o UAC local.
+Depois da confirmação, o PowerShell do Windows executa o script incorporado ao app.
+Ele confere o SHA-256 do auxiliar do pacote, instala ou atualiza o serviço quando
+necessário e autoriza o pedido em andamento. Se o serviço já estiver pronto, ele é
+reutilizado. O Windows pede uma confirmação local por sessão administrativa.
 
-A partir da pasta do pacote instalado ou extraído, execute:
+### Instalação ou remoção manual
+
+O pacote inclui o auxiliar em resources\myscreen-uac.exe e o script
+resources\manage-uac-service.ps1. A instalação aceita o executável sem assinatura.
+Para preparar o serviço manualmente, abra PowerShell de 64 bits como administrador
+na pasta do app instalado e use o SHA-256 do auxiliar publicado na mesma release:
 
 ~~~powershell
-.\resources\manage-uac-service.ps1 -Source .\myscreen-uac.exe -ExpectedSha256 '<SHA-256 de myscreen-uac.exe>'
+.\resources\manage-uac-service.ps1 -Source .\resources\myscreen-uac.exe -ExpectedSha256 '<SHA-256 de myscreen-uac.exe>'
 ~~~
 
-Reinicie o MyScreen depois da instalação. Execute o mesmo comando com o novo executável e o hash correspondente
-para atualizar o serviço. Para desinstalar o componente, use:
+Para atualizar manualmente, execute o mesmo comando com o novo auxiliar e o hash
+correspondente. Para desinstalar o componente, use:
 
 ~~~powershell
 .\resources\manage-uac-service.ps1 -Remove
@@ -703,7 +709,8 @@ falhar. O serviço fica ocioso até uma autorização de uma sessão interativa.
 
 1. Com a tela inteira compartilhada, peça o controle remoto e aguarde a autorização normal.
 2. Quem controla clica no escudo **Solicitar acesso administrativo** na barra da sala. A pessoa
-   controlada confirma o pedido no MyScreen e responde ao primeiro UAC presencialmente.
+   controlada seleciona **Preparar e permitir** e confirma o UAC presencialmente. O MyScreen
+   prepara o serviço automaticamente.
 3. Nos avisos seguintes, o controlador recebe a imagem do diálogo e pode clicar em **Sim** ou
    **Não**. A sala exibe um aviso temporário. Ao terminar, o vídeo e o controle normais retomam.
 4. **Revogar UAC** encerra só o acesso administrativo. Pausar ou encerrar o controle, parar o

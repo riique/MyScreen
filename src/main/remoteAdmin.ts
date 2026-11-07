@@ -19,10 +19,9 @@ type Access = {
 };
 
 type Options = {
-  executable(): string | null;
+  authorization(): { setup: boolean; run(pid: number, nonce: string, hwnd: number): Promise<boolean> } | null;
   window(): BrowserWindow | null;
   showWindow(): void;
-  authorize(exe: string, args: string, hwnd: number): Promise<boolean>;
   allowed(peer: Peer, sessionId: string): boolean;
   releaseInput(): void;
   send(to: string, msg: Ctl): void;
@@ -80,8 +79,8 @@ export class RemoteAdmin {
   }
 
   private async start(peer: Peer, sessionId: string, publicKey: string): Promise<void> {
-    const exe = this.options.executable();
-    if (!exe) {
+    const authorization = this.options.authorization();
+    if (!authorization) {
       this.options.send(peer.identity, { t: "admin-status", sessionId, status: "unavailable" });
       return;
     }
@@ -107,8 +106,10 @@ export class RemoteAdmin {
         type: "warning",
         title: "Acesso administrativo do MyScreen",
         message: "Permitir que " + label + " responda aos avisos do UAC?",
-        detail: "O controlador poderá aprovar ou recusar operações administrativas nesta sessão. O Windows pedirá sua confirmação agora.",
-        buttons: ["Recusar", "Continuar"],
+        detail: authorization.setup
+          ? "O MyScreen prepara o serviço de UAC se necessário. Depois da confirmação do Windows, o controlador poderá responder a avisos administrativos nesta sessão."
+          : "O controlador poderá aprovar ou recusar operações administrativas nesta sessão. O Windows pedirá sua confirmação agora.",
+        buttons: ["Recusar", authorization.setup ? "Preparar e permitir" : "Continuar"],
         defaultId: 0,
         cancelId: 0,
         signal: access.abort.signal,
@@ -122,7 +123,7 @@ export class RemoteAdmin {
       await this.listen(access, nonce);
       if (!this.stillAllowed(access) || win.isDestroyed()) return;
       const hwnd = Number(win.getNativeWindowHandle().readBigInt64LE(0));
-      if (!await this.options.authorize(exe, "--authorize " + process.pid + " " + nonce, hwnd) &&
+      if (!await authorization.run(process.pid, nonce, hwnd) &&
           this.access === access) this.stop("refused");
     } catch {
       if (this.access === access) this.stop("unavailable");

@@ -18,8 +18,7 @@ extraResources:
     to: native/myscreen-native.node
   - from: scripts/manage-uac-service.ps1
     to: manage-uac-service.ps1
-# .exe na raiz para o electron-builder assiná-lo junto com o app.
-extraFiles:
+# Preserva os bytes conferidos pelo SHA-256 gravado no build do app.
   - from: native/target/release/myscreen-uac.exe
     to: myscreen-uac.exe
 win:
