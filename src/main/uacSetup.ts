@@ -1,6 +1,8 @@
 /** O script e o SHA-256 vêm do build. Nenhum trecho vem do participante remoto. */
 export function uacSetupArgs(script: string, source: string, sha256: string, pid: number, nonce: string): string {
-  const psLiteral = (value: string) => "'" + value.replace(/'/g, "''") + "'";
+  // O PowerShell também interpreta aspas tipográficas. Transporte o caminho
+  // como dados para que qualquer nome de pasta chegue literal ao instalador.
+  const encodedSource = Buffer.from(source, "utf8").toString("base64");
   const body = [
     "$ErrorActionPreference = 'Stop'",
     "$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')",
@@ -8,11 +10,12 @@ export function uacSetupArgs(script: string, source: string, sha256: string, pid
     "try {",
     "& {",
     script.replace(/^#Requires -RunAsAdministrator\r?\n/, ""),
-    "} -EnsureInstalled -Source " + psLiteral(source) + " -ExpectedSha256 " + psLiteral(sha256),
+    "} -EnsureInstalled -Source ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" +
+      encodedSource + "'))) -ExpectedSha256 '" + sha256 + "'",
     "$root = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)",
     "$exe = [IO.Path]::Combine($root, 'MyScreen UAC', 'myscreen-uac.exe')",
     "$worker = Start-Process -FilePath $exe -WindowStyle Hidden -Wait -PassThru -ArgumentList @('--authorize', " +
-      psLiteral(String(pid)) + ", " + psLiteral(nonce) + ")",
+      "'" + pid + "', '" + nonce + "')",
     "exit $worker.ExitCode",
     "} catch { exit 1 }",
   ].join("\n");
