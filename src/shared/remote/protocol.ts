@@ -30,6 +30,7 @@ export const MAX_CLIP_FILES = 50;
 export const ATTR_VERSION = "rc.v";
 export const ATTR_DISPLAY = "rc.display";
 export const ATTR_BY = "rc.by";
+export const ATTR_UAC = "rc.uac";
 
 /** Pedido sem resposta vira recusa. */
 export const CONSENT_TIMEOUT_MS = 30_000;
@@ -40,11 +41,14 @@ export type DenyReason = "refused" | "timeout" | "busy" | "disabled" | "not-shar
 export type RevokeReason = "user" | "share-ended" | "left" | "reconnected" | "locked" | "panic" | "error";
 /** `protected`: o MyScreen da pessoa controlada está em primeiro plano e as teclas não entram. */
 export type PauseWhy = "local-input" | "locked" | "elevated" | "user" | "protected";
+export const TOPIC_UAC_FRAME = "myscreen.rc.uac";
+export const MAX_UAC_FRAME_BYTES = 256 * 1024;
+export type AdminStatus = "waiting" | "enabled" | "refused" | "unavailable" | "revoked";
 
 export type Ctl =
   | { t: "request"; v: number; reqId: string }
   | { t: "cancel"; reqId: string }
-  | { t: "grant"; reqId: string; sessionId: string; trackSid: string; width: number; height: number }
+  | { t: "grant"; reqId: string; sessionId: string; trackSid: string; width: number; height: number; admin?: true }
   | { t: "deny"; reqId: string; reason: DenyReason }
   | { t: "revoke"; sessionId: string; reason: RevokeReason }
   | { t: "state"; sessionId: string; paused: boolean; why?: PauseWhy }
@@ -52,6 +56,12 @@ export type Ctl =
   | { t: "blocked"; sessionId: string }
   /** O PC controlado pôs (ok) ou não a imagem/arquivos na área de transferência. */
   | { t: "clip"; sessionId: string; clipId: string; ok: boolean }
+  | { t: "admin-request"; sessionId: string; publicKey: string }
+  | { t: "admin-stop"; sessionId: string }
+  | { t: "admin-status"; sessionId: string; status: AdminStatus }
+  | { t: "admin-view"; sessionId: string; desktop: "normal" | "local" }
+  | { t: "admin-view"; sessionId: string; desktop: "prompt"; generation: number; publicKey: string }
+  | { t: "admin-click"; sessionId: string; generation: number; x: number; y: number }
   | { t: "ping"; sessionId: string; n: number }
   | { t: "pong"; sessionId: string; n: number };
 
@@ -90,6 +100,10 @@ function isTrackSid(v: unknown): v is string {
   return typeof v === "string" && v.length > 0 && v.length <= 64 && /^[A-Za-z0-9_-]+$/.test(v);
 }
 
+function isUacPublicKey(value: unknown): value is string {
+  return typeof value === "string" && /^B[A-Za-z0-9_-]{86}$/.test(value);
+}
+
 /**
  * Valida uma mensagem de controle. Esquema estrito: tipo, cada campo e nada
  * além do tamanho máximo. Qualquer desvio devolve null (e é ignorado).
@@ -113,7 +127,8 @@ export function parseCtl(input: Uint8Array | unknown): Ctl | null {
       return isId(m.reqId) ? { t: "cancel", reqId: m.reqId } : null;
     case "grant":
       return isId(m.reqId) && isId(m.sessionId) && isTrackSid(m.trackSid) && isUint(m.width, 100_000) && isUint(m.height, 100_000)
-        ? { t: "grant", reqId: m.reqId, sessionId: m.sessionId, trackSid: m.trackSid, width: m.width, height: m.height }
+        ? { t: "grant", reqId: m.reqId, sessionId: m.sessionId, trackSid: m.trackSid, width: m.width, height: m.height,
+          ...(m.admin === true ? { admin: true as const } : {}) }
         : null;
     case "deny":
       return isId(m.reqId) && DENY.includes(m.reason as DenyReason)
@@ -136,6 +151,23 @@ export function parseCtl(input: Uint8Array | unknown): Ctl | null {
       return isId(m.sessionId) && isId(m.clipId) && typeof m.ok === "boolean"
         ? { t: "clip", sessionId: m.sessionId, clipId: m.clipId, ok: m.ok }
         : null;
+    case "admin-request":
+      return isId(m.sessionId) && isUacPublicKey(m.publicKey)
+        ? { t: m.t, sessionId: m.sessionId, publicKey: m.publicKey } : null;
+    case "admin-stop":
+      return isId(m.sessionId) ? { t: m.t, sessionId: m.sessionId } : null;
+    case "admin-status":
+      return isId(m.sessionId) && (m.status === "waiting" || m.status === "enabled" || m.status === "refused" ||
+        m.status === "unavailable" || m.status === "revoked")
+        ? { t: m.t, sessionId: m.sessionId, status: m.status } : null;
+    case "admin-view":
+      if (!isId(m.sessionId)) return null;
+      if (m.desktop === "normal" || m.desktop === "local") return { t: m.t, sessionId: m.sessionId, desktop: m.desktop };
+      return m.desktop === "prompt" && isUint(m.generation, 0xffff_ffff) && isUacPublicKey(m.publicKey)
+        ? { t: m.t, sessionId: m.sessionId, desktop: m.desktop, generation: m.generation, publicKey: m.publicKey } : null;
+    case "admin-click":
+      return isId(m.sessionId) && isUint(m.generation, 0xffff_ffff) && isUint(m.x, 65535) && isUint(m.y, 65535)
+        ? { t: m.t, sessionId: m.sessionId, generation: m.generation, x: m.x, y: m.y } : null;
     case "ping":
     case "pong":
       return isId(m.sessionId) && isUint(m.n, 0xffff_ffff) ? { t: m.t, sessionId: m.sessionId, n: m.n } : null;

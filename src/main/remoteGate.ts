@@ -62,6 +62,7 @@ export interface GateDeps {
   share(): HostShare | null;
   /** O injetor nativo carregou e a pessoa não desligou o recurso. */
   acceptsRequests(): { ok: true } | { ok: false; reason: "disabled" };
+  supportsAdmin?(): boolean;
   /**
    * Uma janela do MyScreen está em primeiro plano: tecla é descartada. (O
    * clique sobre uma janela do MyScreen é descartado no utility "input", que
@@ -233,6 +234,7 @@ export class RemoteGate {
       trackSid: share.trackSid,
       width: Math.round(share.physical.w),
       height: Math.round(share.physical.h),
+      ...(this.deps.supportsAdmin?.() ? { admin: true } : {}),
     });
     // Quem acabou de clicar em "Permitir" está com o MyScreen na frente: avisa
     // o controlador que as teclas só chegam depois de um clique fora dele.
@@ -245,6 +247,18 @@ export class RemoteGate {
   private isSessionPeer(from: Peer): boolean {
     const s = this.session;
     return s !== null && s.peer.identity === from.identity && s.peer.sid === from.sid;
+  }
+
+  canUseAdmin(from: Peer, sessionId: string): boolean {
+    const s = this.session;
+    return s !== null && s.sessionId === sessionId && !s.paused && this.isSessionPeer(from);
+  }
+
+  releaseForDesktopSwitch(): void {
+    if (this.session) {
+      this.releaseAll(this.session);
+      this.session.clip = null;
+    }
   }
 
   private take(s: Session, cost: number, reserve: number): boolean {

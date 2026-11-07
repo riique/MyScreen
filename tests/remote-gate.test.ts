@@ -80,6 +80,18 @@ beforeEach(() => {
 });
 
 describe("consentimento", () => {
+  it("restringe pedidos administrativos à sessão ativa e ao SID autorizado", () => {
+    expect(t.gate.canUseAdmin(ana, SESSION)).toBe(false);
+    t.grant();
+    expect(t.gate.canUseAdmin(ana, SESSION)).toBe(true);
+    expect(t.gate.canUseAdmin(ana, REQ)).toBe(false);
+    expect(t.gate.canUseAdmin({ ...ana, sid: "PA_ana2" }, SESSION)).toBe(false);
+    t.gate.setPaused(true);
+    expect(t.gate.canUseAdmin(ana, SESSION)).toBe(false);
+    t.gate.setPaused(false);
+    t.gate.peerSeen(ana.identity, "PA_ana2");
+    expect(t.gate.canUseAdmin(ana, SESSION)).toBe(false);
+  });
   it("quem permitiu com o MyScreen na frente recebe o aviso junto com o grant", () => {
     const u = setup();
     u.world.appFocused = true;

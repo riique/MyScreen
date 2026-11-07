@@ -20,6 +20,7 @@ import { MAX_CLIP_FILES, MAX_CLIP_FILES_BYTES, isId, parseCtl, randomId, type Ct
 import { nativeModulePath } from "./audio";
 import { appImage } from "./icons";
 import { HELPER_FLAG, PARENT_FLAG } from "./inputHelper";
+import { RemoteAdmin } from "./remoteAdmin";
 import { readRichClipboard, writeClipboardFiles, writeClipboardImage } from "./remoteClipboard";
 import { RemoteGate, type HostShare, type InjectCommand, type SessionInfo } from "./remoteGate";
 import { asBoolean, asObject, asString, assertAppSender } from "./security";
@@ -36,7 +37,7 @@ import { getMainWindow, getSharing, onSharingChanged, showMainWindow } from "./w
 export const PANIC_SHORTCUT = "Control+Alt+Shift+S";
 
 type WorkerMessage =
-  | { type: "probe"; ok: boolean; error: string | null }
+  | { type: "probe"; ok: boolean; error: string | null; uacPath: string | null }
   | { type: "elevated"; on: boolean }
   | { type: "error"; message: string }
   | { type: "blocked" }
@@ -57,6 +58,7 @@ let elevating = false;
 let onElevate: ((msg: WorkerMessage & { type: "elevate" }) => void) | null = null;
 
 const DRY_RUN = process.env.MYSCREEN_INPUT_DRYRUN === "1";
+let uacPath: string | null = null;
 
 function sendToMain(channel: string, ...args: unknown[]): void {
   const win = getMainWindow();
@@ -73,6 +75,7 @@ function ensureChild(): UtilityProcess {
   proc.on("message", (msg: WorkerMessage) => {
     switch (msg.type) {
       case "probe":
+        uacPath = msg.uacPath;
         onProbe?.(msg);
         onProbe = null;
         break;
@@ -193,6 +196,7 @@ const gate: RemoteGate = new RemoteGate({
   randomId,
   share: currentShare,
   acceptsRequests: () => (available && !getSettings().remoteControlDisabled ? { ok: true } : { ok: false, reason: "disabled" }),
+  supportsAdmin: () => uacPath !== null,
   appFocused: () => BrowserWindow.getFocusedWindow() !== null,
   send: (to: string, msg: Ctl) => sendToMain("remote:send", to, msg),
   // Com o auxiliar elevado, o comando passa antes pelo utility (zona
@@ -209,6 +213,17 @@ const gate: RemoteGate = new RemoteGate({
   sessionChanged: (info, ended) => onSessionChanged(info, ended ?? null),
 });
 
+const admin = new RemoteAdmin({
+  executable: () => uacPath,
+  window: getMainWindow,
+  showWindow: showMainWindow,
+  authorize: launchElevated,
+  allowed: (peer, sessionId) => gate.canUseAdmin(peer, sessionId),
+  releaseInput: () => gate.releaseForDesktopSwitch(),
+  send: (to, msg) => sendToMain("remote:send", to, msg),
+  emit: (event) => sendToMain("remote:admin", event),
+});
+
 // ---------------------------------------------------------------- janelas de administrador
 
 /**
@@ -220,7 +235,7 @@ const gate: RemoteGate = new RemoteGate({
 async function elevateInput(): Promise<boolean> {
   const proc = child;
   if (elevatedLink) return true;
-  if (elevating || !proc || DRY_RUN) return false;
+  if (elevating || !proc || DRY_RUN || admin.blocksInput) return false;
   elevating = true;
   const pipe = `\\\\.\\pipe\\myscreen-input-${randomBytes(16).toString("hex")}`;
   const server = net.createServer();
@@ -253,15 +268,7 @@ async function elevateInput(): Promise<boolean> {
       `${HELPER_FLAG}${pipe}`,
       `${PARENT_FLAG}${process.pid}`,
     ].join(" ");
-    const reply = new Promise<WorkerMessage & { type: "elevate" }>((resolve) => {
-      onElevate = resolve;
-    });
-    proc.postMessage({ type: "elevate", exe: process.execPath, args, hwnd });
-    const result = await reply;
-    if (!result.ok) {
-      if (result.error) console.warn("Auxiliar elevado:", result.error);
-      return false;
-    }
+    if (!await launchElevated(process.execPath, args, hwnd)) return false;
     await Promise.race([connected, new Promise((resolve) => setTimeout(resolve, 15000))]);
     if (!socket) {
       console.warn("Auxiliar elevado: não conectou ao pipe.");
@@ -283,6 +290,15 @@ async function elevateInput(): Promise<boolean> {
   }
 }
 
+async function launchElevated(exe: string, args: string, hwnd: number): Promise<boolean> {
+  if (!child || DRY_RUN || onElevate) return false;
+  const reply = new Promise<WorkerMessage & { type: "elevate" }>((resolve) => { onElevate = resolve; });
+  child.postMessage({ type: "elevate", exe, args, hwnd });
+  const result = await reply;
+  if (result.error) console.warn("Auxiliar elevado:", result.error);
+  return result.ok;
+}
+
 function attachElevated(socket: net.Socket): void {
   // O que o injetor comum segurava não fica preso.
   child?.postMessage({ type: "inject", cmd: { t: "release" } });
@@ -299,6 +315,7 @@ function attachElevated(socket: net.Socket): void {
 // ---------------------------------------------------------------- sessão
 
 function onSessionChanged(info: SessionInfo | null, ended: RemoteSessionEvent["ended"]): void {
+  if (!info || info.paused) admin.stop();
   const event: RemoteSessionEvent = { session: info, ended };
   sendToMain("remote:session", event);
   syncWatch(info !== null);
@@ -400,10 +417,13 @@ export function registerRemote(): void {
 
   on("remote:control", (_e, peer, raw) => {
     const msg = parseCtl(raw);
-    if (msg) gate.handleCtl(asPeer(peer), msg);
+    if (!msg) return;
+    const from = asPeer(peer);
+    if (msg.t === "admin-request" || msg.t === "admin-stop" || msg.t === "admin-click") admin.handle(from, msg);
+    else gate.handleCtl(from, msg);
   });
   on("remote:input", (_e, peer, bytes) => {
-    if (!(bytes instanceof Uint8Array)) return;
+    if (admin.blocksInput || !(bytes instanceof Uint8Array)) return;
     gate.handleInput(asPeer(peer), bytes);
   });
   on("remote:decide", (_e, reqId, allow) => gate.decide(asString(reqId, "reqId", 64), asBoolean(allow, "allow")));
@@ -413,6 +433,7 @@ export function registerRemote(): void {
   on("remote:peerGone", (_e, identity) => gate.peerGone(asString(identity, "identity", 128), "left"));
   on("remote:roomLost", () => gate.end("left"));
   on("remote:stop", () => gate.end("user"));
+  on("remote:stopAdmin", () => admin.stop());
   on("remote:pause", (_e, paused) => gate.setPaused(asBoolean(paused, "paused")));
   ipcMain.handle("remote:elevate", async (event) => {
     assertAppSender(event);
@@ -433,6 +454,7 @@ export function registerRemote(): void {
   // Lado controlado: imagem/arquivos que quem controla copiou. Só entram da
   // sessão ativa, sem pausa; a resposta volta a quem controla pelo rc.ctl.
   on("remote:deliverClip", (_e, peer, raw) => {
+    if (admin.blocksInput) return;
     const from = asPeer(peer);
     const v = asObject(raw, "clip");
     const sessionId = v.sessionId;

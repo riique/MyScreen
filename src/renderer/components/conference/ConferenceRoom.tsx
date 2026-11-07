@@ -44,7 +44,7 @@ import {
   screenBitrate,
   type MediaPrefs,
 } from "@shared/media";
-import { ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
+import { ATTR_UAC, ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
 import { ChatSidebar } from "./ChatSidebar";
 import { useRoomChat } from "./useRoomChat";
 import { MediaControls } from "./MediaControls";
@@ -56,6 +56,8 @@ import { SystemAudioControl } from "./SystemAudioControl";
 import { TrackStatsDropdown } from "./TrackStatsDropdown";
 import { ConsentDialog } from "./remote/ConsentDialog";
 import { ControlOverlay } from "./remote/ControlOverlay";
+import { SecureDesktop } from "./remote/SecureDesktop";
+import { useRemoteAdminHost } from "./remote/useRemoteAdminHost";
 import { ControllingPill, ControlToolbar } from "./remote/ControlToolbar";
 import { PANIC_SHORTCUT_LABEL } from "./remote/labels";
 import { useRemoteControlHost, type HostShare } from "./remote/useRemoteControlHost";
@@ -352,6 +354,7 @@ function ConferenceStage({
     sendChat: roomChat.send,
   });
   const remoteViewer = useRemoteControlViewer(room);
+  const remoteAdmin = useRemoteAdminHost(room);
   // "Enviar texto" abre pela barra da sala, mas o formulário fica no quadro.
   const [rcTextOpen, setRcTextOpen] = useState(false);
   const rcActive = remoteViewer.state.phase === "active";
@@ -1098,6 +1101,7 @@ function ConferenceStage({
               elevated={remoteHost.session.elevated}
               elevating={remoteHost.elevating}
               onElevate={remoteHost.elevate}
+              admin={remoteAdmin}
               onPause={() => remoteHost.pause(!remoteHost.session?.paused)}
               onStop={remoteHost.stop}
             />
@@ -1116,6 +1120,7 @@ function ConferenceStage({
               onToggleText={() => setRcTextOpen((v) => !v)}
               onFullscreen={() => toggleFullscreen(document.querySelector("[data-rc-controlled]"))}
               onStop={remoteViewer.stop}
+              onAdmin={remoteViewer.state.adminStatus === "enabled" ? remoteViewer.stopAdmin : remoteViewer.requestAdmin}
             />
           ) : null}
           <CopyLinkButton url={platform.inviteUrl(roomId)} />
@@ -1683,10 +1688,11 @@ function Tile({
   // Controle remoto: só a tela de quem anuncia `rc.v` compatível (app de
   // Windows, tela inteira, recurso ligado) oferece "Pedir controle".
   const rcVersion = useParticipantAttribute(ATTR_VERSION, { participant });
+  const secureDesktop = useParticipantAttribute(ATTR_UAC, { participant }) === "1" && isScreen;
   const rs = remote.state;
   const isTarget = rs.phase !== "idle" && rs.target === participant.identity && isScreen;
   const controlling =
-    isTarget && rs.phase === "active" && hasVideo && trackRef.publication?.trackSid === rs.trackSid;
+    isTarget && rs.phase === "active" && trackRef.publication?.trackSid === rs.trackSid;
   const requesting = isTarget && rs.phase === "requesting";
   const canRequest =
     isScreen && !participant.isLocal && hasVideo && rcVersion === String(RC_VERSION) && rs.phase === "idle";
@@ -1741,7 +1747,9 @@ function Tile({
         chromeHidden && "cursor-none",
       )}
     >
-      {hasVideo ? (
+      {secureDesktop ? (
+        <p role="status" className="px-4 text-center text-sm text-white">O Windows está exibindo um aviso protegido.</p>
+      ) : hasVideo ? (
         <VideoTrack
           trackRef={trackRef}
           className={cn(
@@ -1764,11 +1772,18 @@ function Tile({
 
       {controlling && rs.phase === "active" ? (
         <>
-          <ControlOverlay
+          {rs.adminView && rs.adminView.desktop !== "normal" ? (
+            <SecureDesktop
+              key={rs.adminView.desktop === "prompt" ? rs.adminView.generation : rs.adminView.desktop}
+              view={rs.adminView}
+              onClick={remote.adminClick}
+              frame={rs.adminImage}
+            />
+          ) : !secureDesktop && hasVideo ? <ControlOverlay
             send={remote.send}
             sendClip={remote.sendClip}
             label={`Tela de ${name}, controlada por você`}
-          />
+          /> : null}
           <ControlToolbar
             state={rs}
             clip={remote.clipNotice}
@@ -1778,6 +1793,7 @@ function Tile({
             setTextOpen={setRcTextOpen}
             onFullscreen={() => onToggleFullscreen(ref.current)}
             onStop={remote.stop}
+            onAdmin={rs.adminStatus === "enabled" ? remote.stopAdmin : remote.requestAdmin}
             send={remote.send}
           />
         </>
@@ -2107,6 +2123,7 @@ function ControlledPill({
   elevated,
   elevating,
   onElevate,
+  admin,
   onPause,
   onStop,
 }: {
@@ -2116,6 +2133,7 @@ function ControlledPill({
   elevated: boolean;
   elevating: boolean;
   onElevate: () => void;
+  admin: boolean;
   onPause: () => void;
   onStop: () => void;
 }) {
@@ -2129,6 +2147,16 @@ function ControlledPill({
       <span className="max-w-[14rem] truncate font-medium">
         {paused ? `Controle de ${name} pausado` : `${name} está controlando`}
       </span>
+      {admin ? (
+        <button
+          type="button"
+          onClick={() => window.myscreen.remote.stopAdmin()}
+          title="Revogar acesso aos avisos do UAC"
+          className="h-7 px-2 text-[0.75rem] font-semibold hover:bg-alert-wash-2"
+        >
+          Revogar UAC
+        </button>
+      ) : null}
       {elevated && !paused ? (
         <button
           type="button"

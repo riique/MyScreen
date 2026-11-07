@@ -190,6 +190,12 @@ export interface RemoteSessionEvent {
   ended: { reason: string; identity: string; name: string } | null;
 }
 
+export type RemoteAdminEvent =
+  | { t: "authorized"; sessionId: string; identity: string; sid: string; publicKey: string }
+  | { t: "desktop"; sessionId: string; secure: boolean }
+  | { t: "frame"; sessionId: string; generation: number; width: number; height: number; rgba: Uint8Array }
+  | { t: "end"; sessionId: string };
+
 export interface DesktopBridge {
   app: {
     info(): Promise<{ version: string; platform: string; isPackaged: boolean }>;
@@ -274,6 +280,8 @@ export interface DesktopBridge {
     pause(paused: boolean): void;
     /** Libera janelas de administrador (pede o UAC). Resolve se ficou liberado. */
     elevate(): Promise<boolean>;
+    stopAdmin(): void;
+    onAdmin: (cb: (event: RemoteAdminEvent) => void) => () => void;
     /** Lado de quem controla: liga/desliga o hook que manda TODA tecla ao PC remoto. */
     captureKeys(on: boolean): void;
     /** Lado de quem controla: o texto da área de transferência deste PC. */

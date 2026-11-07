@@ -37,8 +37,12 @@ ControlOverlay → rc.in (data channel) → renderer → IPC → main: RemoteGat
 - Só tela inteira (não janela). O navegador pode ser controlado? Não — só o app de Windows.
 - Janelas de administrador (UIPI): a pessoa controlada clica em **Liberar** na sala (avisada por notificação) e
   aceita o UAC; um auxiliar elevado passa a injetar o input até o app fechar.
-- Limitações do Windows: UAC, tela de bloqueio e `Ctrl+Alt+Del` ficam fora do alcance; o layout de teclado que vale é o do PC controlado ("Enviar texto" para
-  layouts diferentes).
+- **Responder ao UAC**: com o serviço opcional instalado no PC controlado, quem controla pode clicar
+  no escudo **Solicitar acesso administrativo**. A pessoa no PC confirma a autorização para aquela
+  sessão. Os avisos de consentimento seguintes aparecem em vídeo privado e aceitam clique remoto.
+  [Instalação, escopo e teste manual](CONTROLE-REMOTO.md#acesso-administrativo-uac).
+- A tela de bloqueio e `Ctrl+Alt+Del` ficam sob controle local. O layout de teclado que vale é o do
+  PC controlado ("Enviar texto" para layouts diferentes).
 - O servidor precisa emitir tokens com `canUpdateOwnMetadata` e `identityProof` (site ≥ commit do
   controle remoto). Com servidor antigo o recurso simplesmente não aparece.
 - Configurações → **Nunca aceitar pedidos de controle** desliga o anúncio.

@@ -1,4 +1,4 @@
-import { Keyboard, Maximize2, MousePointer2, Send, X } from "lucide-react";
+import { Keyboard, Maximize2, MousePointer2, Send, Shield, X } from "lucide-react";
 import { useState } from "react";
 import { MAX_TEXT_BYTES, type InputEvent } from "@shared/remote/protocol";
 import type { ClipNotice, ViewerState } from "./useRemoteControlViewer";
@@ -21,6 +21,7 @@ export function ControlToolbar({
   setTextOpen,
   onFullscreen,
   onStop,
+  onAdmin,
   send,
 }: {
   state: Extract<ViewerState, { phase: "active" }>;
@@ -31,10 +32,13 @@ export function ControlToolbar({
   setTextOpen: (open: boolean | ((v: boolean) => boolean)) => void;
   onFullscreen: () => void;
   onStop: () => void;
+  onAdmin: () => void;
   send: (ev: InputEvent) => void;
 }) {
   const pausedText =
-    state.why === "elevated"
+    state.adminView && state.adminView.desktop !== "normal"
+      ? null
+      : state.why === "elevated"
       ? `${state.targetName} está numa janela de administrador. Para você mexer nela, ${state.targetName} precisa clicar em "Liberar" no MyScreen (ao lado de "está controlando").`
       : state.why === "local-input"
         ? `${state.targetName} está usando o mouse. O controle volta para você quando ${state.targetName} parar de mexer.`
@@ -75,6 +79,7 @@ export function ControlToolbar({
         <ToolbarButton label="Tela cheia" onClick={onFullscreen}>
           <Maximize2 size={14} strokeWidth={1.75} aria-hidden />
         </ToolbarButton>
+        <AdminButton state={state} onAdmin={onAdmin} />
         <button
           type="button"
           onClick={onStop}
@@ -111,12 +116,14 @@ export function ControllingPill({
   onToggleText,
   onFullscreen,
   onStop,
+  onAdmin,
 }: {
   state: Extract<ViewerState, { phase: "active" }>;
   textOpen: boolean;
   onToggleText: () => void;
   onFullscreen: () => void;
   onStop: () => void;
+  onAdmin: () => void;
 }) {
   const btn = "flex size-7 items-center justify-center transition-colors hover:bg-band [border-radius:var(--radius-cell)]";
   return (
@@ -146,6 +153,7 @@ export function ControllingPill({
       <button type="button" aria-label="Tela cheia" title="Tela cheia" onClick={onFullscreen} className={btn}>
         <Maximize2 size={15} strokeWidth={1.75} aria-hidden />
       </button>
+      <AdminButton state={state} onAdmin={onAdmin} />
       <button
         type="button"
         onClick={onStop}
@@ -155,6 +163,32 @@ export function ControllingPill({
         Soltar
       </button>
     </div>
+  );
+}
+
+function AdminButton({ state, onAdmin }: { state: Extract<ViewerState, { phase: "active" }>; onAdmin: () => void }) {
+  if (!state.adminAvailable) return null;
+  const labels = {
+    waiting: "Aguardando a confirmação no PC remoto",
+    enabled: "Encerrar acesso administrativo",
+    refused: "Acesso recusado. Solicitar acesso administrativo",
+    unavailable: "Acesso indisponível. Solicitar acesso administrativo",
+    revoked: "Solicitar acesso administrativo",
+  };
+  const label = state.adminStatus ? labels[state.adminStatus] : "Solicitar acesso administrativo";
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={state.adminStatus === "enabled"}
+      disabled={state.paused || state.adminStatus === "waiting"}
+      onClick={onAdmin}
+      className="flex h-7 shrink-0 items-center gap-1 rounded px-1.5 hover:bg-current/10 disabled:opacity-50"
+    >
+      <Shield size={14} aria-hidden />
+      {state.adminStatus === "waiting" ? "Aguardando…" : state.adminStatus === "enabled" ? "UAC ativo" : null}
+    </button>
   );
 }
 

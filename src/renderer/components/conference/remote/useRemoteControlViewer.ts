@@ -4,22 +4,26 @@ import type { RichClipboard } from "@shared/ipc";
 import {
   CLIP_ATTR,
   CONSENT_TIMEOUT_MS,
+  MAX_UAC_FRAME_BYTES,
   RC_VERSION,
   TOPIC_CLIP,
   TOPIC_CTL,
   TOPIC_IN,
+  TOPIC_UAC_FRAME,
   encodeCtl,
   encodeInput,
   isLossy,
   parseCtl,
   randomId,
   sessionTag,
+  type AdminStatus,
   type Ctl,
   type DenyReason,
   type InputEvent,
   type PauseWhy,
   type RevokeReason,
 } from "@shared/remote/protocol";
+import { createUacKeyPair, decryptUacFrame, deriveUacKey } from "./uacVideoCrypto";
 
 /**
  * Lado de quem controla: pede, espera a permissão, manda o input e mede a
@@ -29,10 +33,11 @@ import {
 
 export type ViewerState =
   | { phase: "idle" }
-  | { phase: "requesting"; target: string; targetName: string; reqId: string }
+  | { phase: "requesting"; target: string; targetSid: string; targetName: string; reqId: string }
   | {
       phase: "active";
       target: string;
+      targetSid: string;
       targetName: string;
       sessionId: string;
       trackSid: string;
@@ -44,6 +49,10 @@ export type ViewerState =
       blocked: boolean;
       /** Ida e volta do `ping` em ms; null até a primeira medida. */
       rttMs: number | null;
+      adminAvailable: boolean;
+      adminStatus: AdminStatus | null;
+      adminView: Extract<Ctl, { t: "admin-view" }> | null;
+      adminImage: Blob | null;
     };
 
 /** Imagem/arquivos indo para a área de transferência do PC controlado. */
@@ -64,6 +73,9 @@ export interface RemoteViewer {
   cancel(): void;
   stop(): void;
   send(ev: InputEvent): void;
+  requestAdmin(): void;
+  stopAdmin(): void;
+  adminClick(generation: number, x: number, y: number): void;
 }
 
 const PING_INTERVAL_MS = 2000;
@@ -111,6 +123,12 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
   const [state, setState] = useState<ViewerState>({ phase: "idle" });
   const [notice, setNotice] = useState<string | null>(null);
   const stateRef = useRef(state);
+  const adminKey = useRef<{ sessionId: string; privateKey?: CryptoKey } | null>(null);
+  const adminFeed = useRef<{
+    sessionId: string;
+    generation: number;
+    key: Promise<CryptoKey | null>;
+  } | null>(null);
   stateRef.current = state;
   const seq = useRef(0);
   const pings = useRef(new Map<number, number>());
@@ -139,7 +157,7 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
   const send = useCallback(
     (ev: InputEvent) => {
       const s = stateRef.current;
-      if (s.phase !== "active") return;
+      if (s.phase !== "active" || (s.adminView && s.adminView.desktop !== "normal")) return;
       seq.current = (seq.current + 1) & 0xffff;
       const bytes = encodeInput(sessionTag(s.sessionId), seq.current, ev);
       void room.localParticipant
@@ -154,7 +172,7 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
   const sendClip = useCallback(
     async (clip: RichClipboard) => {
       const s = stateRef.current;
-      if (s.phase !== "active") return;
+      if (s.phase !== "active" || (s.adminView && s.adminView.desktop !== "normal")) return;
       if (clip.kind === "unsupported") {
         showClip({ tone: "error", text: clip.message });
         return;
@@ -209,7 +227,7 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
       const reqId = randomId();
       const name = participant.name || participant.identity;
       setNotice(null);
-      setState({ phase: "requesting", target: participant.identity, targetName: name, reqId });
+      setState({ phase: "requesting", target: participant.identity, targetSid: participant.sid, targetName: name, reqId });
       sendCtl(participant.identity, { t: "request", v: RC_VERSION, reqId });
     },
     [sendCtl],
@@ -236,7 +254,7 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
     const onData = (payload: Uint8Array, participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
       if (topic !== TOPIC_CTL || !participant) return;
       const s = stateRef.current;
-      if (s.phase === "idle" || participant.identity !== s.target) return;
+      if (s.phase === "idle" || participant.identity !== s.target || participant.sid !== s.targetSid) return;
       const msg = parseCtl(payload);
       if (!msg) return;
       switch (msg.t) {
@@ -247,6 +265,7 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
           setState({
             phase: "active",
             target: s.target,
+            targetSid: s.targetSid,
             targetName: s.targetName,
             sessionId: msg.sessionId,
             trackSid: msg.trackSid,
@@ -256,6 +275,10 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
             why: null,
             blocked: false,
             rttMs: null,
+            adminAvailable: msg.admin === true,
+            adminStatus: null,
+            adminView: null,
+            adminImage: null,
           });
           break;
         case "deny":
@@ -270,7 +293,39 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
           break;
         case "state":
           if (s.phase !== "active" || msg.sessionId !== s.sessionId) return;
-          setState({ ...s, paused: msg.paused, why: msg.why ?? null });
+          setState((cur) => cur.phase === "active" && cur.sessionId === msg.sessionId
+            ? { ...cur, paused: msg.paused, why: msg.why ?? null }
+            : cur);
+          break;
+        case "admin-status":
+          if (s.phase !== "active" || msg.sessionId !== s.sessionId) return;
+          if (msg.status === "refused" || msg.status === "unavailable" || msg.status === "revoked") {
+            adminKey.current = null;
+            adminFeed.current = null;
+          }
+          if (msg.status === "refused") setNotice(`${s.targetName} recusou o acesso administrativo.`);
+          if (msg.status === "unavailable") setNotice("O acesso administrativo está indisponível no PC remoto.");
+          setState((cur) => cur.phase === "active" && cur.sessionId === msg.sessionId
+            ? { ...cur, adminStatus: msg.status, adminView: msg.status === "enabled" ? cur.adminView : null,
+                adminImage: msg.status === "enabled" ? cur.adminImage : null }
+            : cur);
+          break;
+        case "admin-view":
+          if (s.phase !== "active" || msg.sessionId !== s.sessionId) return;
+          setState((cur) => cur.phase === "active" && cur.sessionId === msg.sessionId && cur.adminStatus === "enabled"
+            ? { ...cur, adminView: msg, adminImage: null }
+            : cur);
+          adminFeed.current = null;
+          if (msg.desktop === "prompt") {
+            const approval = adminKey.current;
+            if (approval?.sessionId === msg.sessionId && approval.privateKey) {
+              adminFeed.current = {
+                sessionId: msg.sessionId,
+                generation: msg.generation,
+                key: deriveUacKey(approval.privateKey, msg.publicKey).catch(() => null),
+              };
+            }
+          }
           break;
         case "blocked": {
           if (s.phase !== "active" || msg.sessionId !== s.sessionId) return;
@@ -320,7 +375,40 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
       .on(RoomEvent.ParticipantDisconnected, onGone)
       .on(RoomEvent.Reconnecting, onReconnecting)
       .on(RoomEvent.SignalReconnecting, onReconnecting);
+    room.registerByteStreamHandler(TOPIC_UAC_FRAME, (reader, info) => {
+      void (async () => {
+        const s = stateRef.current;
+        const feed = adminFeed.current;
+        const attrs = reader.info.attributes;
+        if (s.phase !== "active" || !feed || s.target !== info.identity ||
+            room.remoteParticipants.get(info.identity)?.sid !== s.targetSid ||
+            s.sessionId !== feed.sessionId || attrs?.session !== feed.sessionId ||
+            attrs.generation !== String(feed.generation)) return;
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        for await (const chunk of reader) {
+          size += chunk.byteLength;
+          if (size > MAX_UAC_FRAME_BYTES || adminFeed.current !== feed) return;
+          chunks.push(chunk);
+        }
+        const key = await feed.key;
+        if (!key || size < 28 || adminFeed.current !== feed) return;
+        const bytes = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        const plain = await decryptUacFrame(key, feed.sessionId, feed.generation, bytes);
+        if (adminFeed.current !== feed) return;
+        const adminImage = new Blob([plain], { type: "image/jpeg" });
+        setState((cur) => cur.phase === "active" && cur.sessionId === feed.sessionId &&
+          cur.adminView?.desktop === "prompt" && cur.adminView.generation === feed.generation
+          ? { ...cur, adminImage } : cur);
+      })().catch(() => {});
+    });
     return () => {
+      room.unregisterByteStreamHandler(TOPIC_UAC_FRAME);
       room
         .off(RoomEvent.DataReceived, onData)
         .off(RoomEvent.ParticipantDisconnected, onGone)
@@ -370,10 +458,35 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
   // A sessão acabou: o que estava esperando confirmação desiste.
   useEffect(() => {
     if (sessionKey) return;
+    adminKey.current = null;
+    adminFeed.current = null;
     for (const resolve of clipWaits.current.values()) resolve(false);
     clipWaits.current.clear();
     showClip(null);
   }, [sessionKey, showClip]);
 
-  return { state, clipNotice, sendClip, notice, dismissNotice, request, cancel, stop, send };
+  const requestAdmin = useCallback(() => {
+    const s = stateRef.current;
+    if (s.phase !== "active" || !s.adminAvailable || s.paused || s.adminStatus === "enabled" || s.adminStatus === "waiting") return;
+    const approval: NonNullable<typeof adminKey.current> = { sessionId: s.sessionId };
+    adminKey.current = approval;
+    setNotice(null);
+    void createUacKeyPair().then(({ publicKey, privateKey }) => {
+      const current = stateRef.current;
+      if (adminKey.current !== approval || current.phase !== "active" || current.sessionId !== s.sessionId || current.paused) return;
+      approval.privateKey = privateKey;
+      sendCtl(s.target, { t: "admin-request", sessionId: s.sessionId, publicKey });
+    }).catch(() => setNotice("Não foi possível iniciar o acesso administrativo."));
+  }, [sendCtl]);
+  const stopAdmin = useCallback(() => {
+    const s = stateRef.current;
+    if (s.phase === "active") sendCtl(s.target, { t: "admin-stop", sessionId: s.sessionId });
+  }, [sendCtl]);
+  const adminClick = useCallback((generation: number, x: number, y: number) => {
+    const s = stateRef.current;
+    if (s.phase !== "active" || s.paused || s.adminView?.desktop !== "prompt" || s.adminView.generation !== generation) return;
+    sendCtl(s.target, { t: "admin-click", sessionId: s.sessionId, generation, x, y });
+  }, [sendCtl]);
+
+  return { state, clipNotice, sendClip, notice, dismissNotice, request, cancel, stop, send, requestAdmin, stopAdmin, adminClick };
 }
