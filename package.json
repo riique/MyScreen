@@ -1,7 +1,7 @@
 {
   "name": "myscreen-desktop",
   "productName": "MyScreen",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "MyScreen para Windows: tela, som do sistema e câmera na mesma sala.",
   "author": "MyScreen",
   "license": "MIT",
@@ -11,7 +11,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
     "build:native": "node scripts/build-native.mjs",
-    "icon": "node scripts/make-icon.mjs",
+    "icon": "node scripts/make-icon.mjs && node scripts/make-installer-art.mjs",
     "dist": "npm run icon && npm run build:native && npm run build && electron-builder --win --publish never",
     "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json",

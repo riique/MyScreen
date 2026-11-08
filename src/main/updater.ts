@@ -130,5 +130,6 @@ function finishInstallRequest(): void {
   if (!installRequested) return;
   installRequested = false;
   if (status.state !== "ready" || getRoomState().inRoom) return;
-  autoUpdater.quitAndInstall(false, true);
+  // Silencioso (/S): sem o assistente do NSIS; o instalador reabre o app sozinho.
+  autoUpdater.quitAndInstall(true, true);
 }

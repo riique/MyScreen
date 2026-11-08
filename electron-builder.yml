@@ -35,6 +35,11 @@ nsis:
   createDesktopShortcut: true
   shortcutName: MyScreen
   deleteAppDataOnUninstall: false
+  # Arte e textos próprios; atualizações rodam silenciosas (/S) e pulam tudo isso.
+  include: build/installer.nsh
+  installerSidebar: build/installerSidebar.bmp
+  uninstallerSidebar: build/installerSidebar.bmp
+  runAfterFinish: true
 protocols:
   - name: MyScreen
     schemes: [myscreen]
