@@ -2,7 +2,7 @@
 import { ArrowRight, Mic, MicOff, Video, VideoOff, Volume2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { MediaPrefs } from "@shared/media";
-import { Field, Sheet, SheetHead, Stamp, inputClass } from "@/components/sheet";
+import { Button, Field, Select, Sheet, Stamp, inputClass } from "@/components/sheet";
 import { writeMediaPrefs } from "@/lib/storage";
 
 /** O VU empurra estado para o React a 10 Hz; 60 Hz de re-render é caro e invisível. */
@@ -193,8 +193,7 @@ export function GreenRoom({
 
           // 60 Hz no DOM: a barra é o instrumento, não o estado do React.
           if (meterBarRef.current) meterBarRef.current.style.width = `${level}%`;
-          micIconRef.current?.classList.toggle("text-signal", isCapturing);
-          micIconRef.current?.classList.toggle("text-ink-3", !isCapturing);
+          micIconRef.current?.classList.toggle("text-ok", isCapturing);
 
           if (timestamp - lastMeterPushRef.current >= METER_THROTTLE_MS) {
             lastMeterPushRef.current = timestamp;
@@ -328,25 +327,63 @@ export function GreenRoom({
         {/* O monitor de pré-visualização. Escuro como o da sala: é contra um
             fundo neutro que se avalia o que a câmera está vendo. */}
         <div className="border-b border-rule p-4 sm:p-5 lg:border-b-0 lg:border-r">
-          <div className="relative aspect-video overflow-hidden border border-rule-2 bg-monitor">
+          <div className="relative aspect-video overflow-hidden bg-monitor [border-radius:calc(var(--radius-sheet)-4px)]">
             <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
             {!camLive ? (
               <div className="absolute inset-0 flex items-center justify-center px-4">
-                <span className="text-center font-mono text-[0.75rem] uppercase tracking-[0.12em] text-monitor-ink">
+                <span className="text-center text-[0.8125rem] text-monitor-ink">
                   {hasPermissionError ? "Sem permissão de câmera" : "Câmera desligada"}
                 </span>
               </div>
             ) : null}
+            {nickname.trim() ? (
+              <span className="absolute bottom-3 left-3 max-w-[60%] truncate bg-black/55 px-2 py-1 text-[0.75rem] font-medium text-white [border-radius:6px]">
+                {nickname.trim()}
+              </span>
+            ) : null}
+            {/* As duas teclas ficam sobre a imagem, como na sala. */}
+            <div className="absolute right-3 bottom-3 flex gap-2">
+              <ToggleCell
+                on={micLive}
+                onClick={toggleAudio}
+                disabled={joining || hasPermissionError}
+                icon={
+                  micLive ? (
+                    <Mic ref={micIconRef} size={18} strokeWidth={1.75} aria-hidden />
+                  ) : (
+                    <MicOff size={18} strokeWidth={1.75} aria-hidden />
+                  )
+                }
+                label={micLive ? "Microfone ligado" : hasPermissionError ? "Microfone sem acesso" : "Microfone mudo"}
+                pressedLabel="Silenciar microfone"
+                unpressedLabel="Ativar microfone"
+              />
+              <ToggleCell
+                on={camLive}
+                onClick={toggleVideo}
+                disabled={joining || hasPermissionError}
+                icon={
+                  camLive ? (
+                    <Video size={18} strokeWidth={1.75} aria-hidden />
+                  ) : (
+                    <VideoOff size={18} strokeWidth={1.75} aria-hidden />
+                  )
+                }
+                label={camLive ? "Câmera ligada" : hasPermissionError ? "Câmera sem acesso" : "Câmera desligada"}
+                pressedLabel="Desligar câmera"
+                unpressedLabel="Ligar câmera"
+              />
+            </div>
           </div>
 
-          {/* O VU. A régua é o instrumento: a barra anda a 60 Hz, o valor
-              acessível a 10 Hz, e o estado também é escrito por extenso. */}
+          {/* O VU. A barra anda a 60 Hz, o valor acessível a 10 Hz, e o estado
+              também é escrito por extenso. */}
           <div className="mt-4">
             <div className="flex items-baseline justify-between">
               <span className="label-col">
                 Nível do microfone
               </span>
-              <span className="font-mono text-[0.75rem] text-ink-3">
+              <span className="text-[0.75rem] text-ink-3">
                 {!micLive ? "Indisponível" : audioLevel > MIC_LIVE_THRESHOLD ? "Captando áudio" : "Silêncio"}
               </span>
             </div>
@@ -364,9 +401,9 @@ export function GreenRoom({
                     ? "Captando áudio"
                     : "Silêncio"
               }
-              className="mt-2 h-2 w-full border border-rule bg-band"
+              className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-band-2"
             >
-              <div ref={meterBarRef} className="h-full bg-signal" style={{ width: "0%" }} />
+              <div ref={meterBarRef} className="h-full rounded-full bg-ok" style={{ width: "0%" }} />
             </div>
             {audioBlocked ? (
               <p className="mt-2 flex items-start gap-1.5 text-[0.75rem] leading-[1.5] text-ink-3">
@@ -375,53 +412,16 @@ export function GreenRoom({
               </p>
             ) : null}
           </div>
-
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <ToggleCell
-              on={micLive}
-              onClick={toggleAudio}
-              disabled={joining || hasPermissionError}
-              icon={
-                micLive ? (
-                  <Mic ref={micIconRef} size={15} strokeWidth={1.5} className="text-ink-3" aria-hidden />
-                ) : (
-                  <MicOff size={15} strokeWidth={1.5} aria-hidden />
-                )
-              }
-              label={micLive ? "Captando" : hasPermissionError ? "Sem acesso" : "Mudo"}
-              pressedLabel="Silenciar microfone"
-              unpressedLabel="Ativar microfone"
-            />
-            <ToggleCell
-              on={camLive}
-              onClick={toggleVideo}
-              disabled={joining || hasPermissionError}
-              icon={
-                camLive ? (
-                  <Video size={15} strokeWidth={1.5} aria-hidden />
-                ) : (
-                  <VideoOff size={15} strokeWidth={1.5} aria-hidden />
-                )
-              }
-              label={camLive ? "Câmera" : hasPermissionError ? "Sem acesso" : "Desligada"}
-              pressedLabel="Desligar câmera"
-              unpressedLabel="Ligar câmera"
-            />
-          </div>
         </div>
 
         {/* Identidade e acesso. */}
-        <form onSubmit={handleJoinClick} aria-busy={joining} className="p-4 sm:p-5">
-          <SheetHead
-            title="Lobby pré-reunião"
-            id={roomId}
-            action={
-              <Stamp state={isLocked ? "travado" : "pendente"}>
-                {isLocked ? "Com senha" : "Aberta"}
-              </Stamp>
-            }
-          />
-          <p className="mt-2 text-[0.8125rem] leading-[1.5] text-ink-2">{roomTitle}</p>
+        <form onSubmit={handleJoinClick} aria-busy={joining} className="flex flex-col p-5 sm:p-6">
+          <p className="label-col">Lobby pré-reunião</p>
+          <h1 className="mt-1 truncate text-[1.25rem] font-semibold tracking-[-0.025em] text-ink">{roomTitle}</h1>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="font-mono text-[0.75rem] text-ink-3">{roomId}</span>
+            <Stamp state={isLocked ? "travado" : "pendente"}>{isLocked ? "Com senha" : "Aberta"}</Stamp>
+          </div>
 
           {permissionErrorMessage ? (
             <p
@@ -482,7 +482,7 @@ export function GreenRoom({
             ) : null}
 
             <Field label="Microfone" htmlFor="greenroom-audio-device">
-              <select
+              <Select
                 id="greenroom-audio-device"
                 value={selectedAudioId}
                 onChange={(e) => {
@@ -490,7 +490,6 @@ export function GreenRoom({
                   writeMediaPrefs({ audioInputId: e.target.value });
                 }}
                 disabled={joining || audioDevices.length === 0}
-                className={inputClass}
               >
                 {audioDevices.length === 0 ? (
                   <option value="">Nenhum dispositivo listado</option>
@@ -500,11 +499,11 @@ export function GreenRoom({
                     {d.label || `Microfone ${d.deviceId.slice(0, 4)}`}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
 
             <Field label="Câmera" htmlFor="greenroom-video-device">
-              <select
+              <Select
                 id="greenroom-video-device"
                 value={selectedVideoId}
                 onChange={(e) => {
@@ -512,7 +511,6 @@ export function GreenRoom({
                   writeMediaPrefs({ videoInputId: e.target.value });
                 }}
                 disabled={joining || videoDevices.length === 0}
-                className={inputClass}
               >
                 {videoDevices.length === 0 ? (
                   <option value="">Nenhum dispositivo listado</option>
@@ -522,22 +520,23 @@ export function GreenRoom({
                     {d.label || `Câmera ${d.deviceId.slice(0, 4)}`}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
           </div>
 
-          <button
+          <Button
             type="submit"
+            tone="primary"
+            size="lg"
             disabled={!nickname.trim() || joining}
-            className="mt-6 flex w-full items-center justify-center gap-2 border border-signal bg-signal px-4 py-2.5 text-[0.875rem] font-semibold text-on-signal transition-colors hover:bg-signal-2 disabled:pointer-events-none disabled:opacity-40 [border-radius:var(--radius-sheet)]"
+            className="mt-6 w-full"
           >
-            {joining ? "Conectando..." : "Entrar na reunião"}
-            <ArrowRight size={15} strokeWidth={1.5} aria-hidden />
-          </button>
+            {joining ? "Conectando…" : "Entrar na reunião"}
+            <ArrowRight size={17} strokeWidth={1.75} aria-hidden />
+          </Button>
 
           <p className="mt-3 text-[0.75rem] leading-[1.5] text-ink-3">
-            Ao entrar, você poderá compartilhar sua tela com áudio e sua câmera
-            simultaneamente.
+            Lá dentro você compartilha a tela com o som do PC e a câmera ao mesmo tempo.
           </p>
         </form>
       </div>
@@ -580,14 +579,12 @@ function ToggleCell({
       disabled={disabled}
       aria-pressed={on}
       aria-label={on ? pressedLabel : unpressedLabel}
-      className={`flex items-center justify-center gap-2 border px-3 py-2.5 text-[0.8125rem] font-medium transition-colors disabled:pointer-events-none disabled:opacity-55 [border-radius:var(--radius-sheet)] ${
-        on
-          ? "border-signal-line bg-signal-wash text-signal"
-          : "border-rule-2 bg-sheet text-ink-2 hover:border-rule-3 hover:bg-band"
+      title={label}
+      className={`flex size-11 items-center justify-center rounded-full transition-colors duration-150 disabled:pointer-events-none disabled:opacity-55 ${
+        on ? "bg-white/90 text-[#0f111a] hover:bg-white" : "bg-black/65 text-white ring-1 ring-white/25 hover:bg-black/75"
       }`}
     >
       {icon}
-      {label}
     </button>
   );
 }

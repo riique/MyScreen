@@ -15,7 +15,7 @@ export type StampState = "pendente" | "ativo" | "travado";
 
 const STATE: Record<StampState, { label: string; className: string }> = {
   pendente: { label: "PENDENTE", className: "border-rule-2 text-ink-3" },
-  ativo: { label: "ATIVO", className: "border-signal bg-signal-wash text-signal" },
+  ativo: { label: "ATIVO", className: "border-live-line bg-live-wash text-live" },
   travado: { label: "TRAVADO", className: "border-rule-2 text-ink-3" },
 };
 
@@ -39,7 +39,7 @@ export function Stamp({
       )}
     >
       {state === "ativo" ? (
-        <span aria-hidden className="size-[5px] rounded-full bg-signal" />
+        <span aria-hidden data-on="true" className="live-dot !size-[6px]" />
       ) : null}
       {children ?? label}
     </span>

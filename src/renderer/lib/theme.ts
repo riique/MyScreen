@@ -5,9 +5,10 @@ export const THEME_STORAGE_KEY = "myscreen-theme";
 export function readThemePreference(): ThemePreference {
   try {
     const v = localStorage.getItem(THEME_STORAGE_KEY);
-    return v === "light" || v === "dark" ? v : "system";
+    // Padrão claro; o escuro e "seguir o Windows" são escolhas da pessoa.
+    return v === "dark" || v === "system" ? v : "light";
   } catch {
-    return "system";
+    return "light";
   }
 }
 
@@ -21,7 +22,7 @@ export function effectiveTheme(pref: ThemePreference): "light" | "dark" {
 
 /**
  * Aplica o tema no documento e avisa o processo principal (a barra de título
- * nativa acompanha as cores da folha). Sem escolha, segue o Windows.
+ * nativa acompanha as cores da folha). Sem escolha, claro.
  */
 export function applyTheme(pref: ThemePreference, animate = false): void {
   const root = document.documentElement;
@@ -37,8 +38,7 @@ export function applyTheme(pref: ThemePreference, animate = false): void {
 
 export function setThemePreference(pref: ThemePreference): void {
   try {
-    if (pref === "system") localStorage.removeItem(THEME_STORAGE_KEY);
-    else localStorage.setItem(THEME_STORAGE_KEY, pref);
+    localStorage.setItem(THEME_STORAGE_KEY, pref);
   } catch {
     // Vale só para esta sessão.
   }

@@ -77,7 +77,11 @@ import {
   type SystemAudioPrefs,
 } from "@/components/capture/capturePrefs";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { LogoMark } from "@/components/Logo";
+import { buttonClass } from "@/components/sheet";
 import { cn } from "@/lib/utils";
+import { probeEncoders } from "@/lib/codecProbe";
+import { chooseScreenCodec, isSvcCodec } from "@shared/codec";
 import { usePlatform } from "@/platform";
 import {
   Activity,
@@ -593,12 +597,20 @@ function ConferenceStage({
 
       const { width, height } = RESOLUTION[merged.screenResolution];
       const contentHint = merged.screenContentType === "detail" ? "detail" : "motion";
+      const codec = chooseScreenCodec("auto", await probeEncoders(width, height, merged.screenFps));
       const publishOptions: TrackPublishOptions = {
         screenShareEncoding: {
           maxBitrate: screenBitrate(merged.screenResolution, merged.screenFps),
           maxFramerate: merged.screenFps,
           priority: "high",
         },
+        videoCodec: codec.codec,
+        // AV1/VP9: uma camada espacial (a tela inteira, sempre) e três
+        // temporais, para o SFU baixar a taxa de quem tem rede fraca sem
+        // tirar a nitidez. Quem não decodifica recebe o codec reserva.
+        ...(isSvcCodec(codec.codec)
+          ? { scalabilityMode: "L1T3" as const, backupCodec: { codec: codec.backup ?? "vp8" } }
+          : { backupCodec: false }),
         // Uma camada só: quem assiste recebe sempre a tela inteira.
         simulcast: false,
         // Texto precisa de nitidez (cai a taxa); vídeo e jogo, de fluidez.
@@ -1073,17 +1085,21 @@ function ConferenceStage({
       {/* --- Barra superior (área de arrastar da janela) ----------------- */}
       <header className="app-drag titlebar-pad flex h-12 shrink-0 items-center justify-between gap-3 border-b border-rule bg-sheet pl-4">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="text-[0.9375rem] font-semibold tracking-[-0.02em]">
-            My<span className="text-signal">Screen</span>
-          </span>
-          <span aria-hidden className="h-4 w-px bg-rule-2" />
+          <LogoMark live={isScreenSharing} className="size-[22px]" />
           <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-[0.875rem] font-medium tracking-[-0.01em] text-ink">{roomLabel}</span>
             <span
               aria-hidden
-              className={cn("size-2 shrink-0 rounded-full", reconnecting ? "animate-pulse bg-warn-dot" : "bg-signal")}
+              title={reconnecting ? "Reconectando" : "Conectado"}
+              className={cn("size-1.5 shrink-0 rounded-full", reconnecting ? "animate-pulse bg-warn-dot" : "bg-ok")}
             />
-            <span className="truncate font-mono text-[0.8125rem] text-ink-2">{roomLabel}</span>
           </span>
+          {isScreenSharing ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-live-wash px-2 py-0.5 text-[0.6875rem] font-semibold tracking-[0.04em] text-live shadow-[inset_0_0_0_1px_var(--color-live-line)]">
+              <span aria-hidden data-on="true" className="live-dot !size-1.5" />
+              NO AR
+            </span>
+          ) : null}
           {reconnecting ? (
             <span className="text-[0.75rem] text-warn">
               {connectionState === ConnectionState.SignalReconnecting
@@ -1740,9 +1756,9 @@ function Tile({
         if (!controlling) setMenu({ x: event.clientX, y: event.clientY });
       }}
       className={cn(
-        "group relative flex h-full w-full items-center justify-center overflow-hidden bg-monitor ring-1 ring-rule [border-radius:var(--radius-sheet)]",
+        "group relative flex h-full w-full items-center justify-center overflow-hidden bg-monitor [border-radius:var(--radius-sheet)]",
         "outline outline-2 -outline-offset-2 transition-[outline-color] duration-200",
-        controlling ? "outline-[#d92d20]" : speaking && !isScreen ? "outline-signal" : "outline-transparent",
+        controlling ? "outline-live" : speaking && !isScreen ? "outline-ok" : "outline-transparent",
         isFullscreen && "[border-radius:0]",
         chromeHidden && "cursor-none",
       )}
@@ -2046,7 +2062,8 @@ function initials(name: string): string {
 
 function EmptyStage({ onShare }: { onShare: () => void }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 border border-dashed border-rule-2 px-6 text-center [border-radius:var(--radius-sheet)]">
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 bg-sheet px-6 text-center shadow-lift [border-radius:var(--radius-sheet)]">
+      <LogoMark className="size-10" />
       <div>
         <p className="text-[1.0625rem] font-semibold tracking-[-0.01em] text-ink">
           Ninguém está transmitindo ainda
@@ -2059,7 +2076,7 @@ function EmptyStage({ onShare }: { onShare: () => void }) {
       <button
         type="button"
         onClick={onShare}
-        className="inline-flex items-center gap-2 border border-signal bg-signal px-5 py-2.5 text-[0.875rem] font-semibold text-on-signal transition-colors hover:border-signal-2 hover:bg-signal-2 [border-radius:var(--radius-sheet)]"
+        className={buttonClass("primary", "lg")}
       >
         <MonitorUp size={17} strokeWidth={1.75} aria-hidden />
         Compartilhar tela
@@ -2143,7 +2160,7 @@ function ControlledPill({
       className="mr-1 flex h-9 items-center gap-1 border border-alert-line bg-alert-wash pr-1 pl-2.5 text-[0.8125rem] text-alert [border-radius:var(--radius-cell)]"
       title={`Parar a qualquer momento: ${PANIC_SHORTCUT_LABEL}`}
     >
-      <span aria-hidden className={cn("size-2 shrink-0 rounded-full bg-[#d92d20]", !paused && "animate-pulse")} />
+      <span aria-hidden className={cn("size-2 shrink-0 rounded-full bg-live", !paused && "animate-pulse")} />
       <span className="max-w-[14rem] truncate font-medium">
         {paused ? `Controle de ${name} pausado` : `${name} está controlando`}
       </span>
@@ -2196,7 +2213,7 @@ function RecordingPill({ count, since, onClick }: { count: number; since: number
       title="Gravações em andamento"
       className="mr-1 flex h-9 items-center gap-2 border border-alert-line bg-alert-wash px-2.5 text-[0.8125rem] font-medium text-alert transition-colors hover:bg-alert-wash-2 [border-radius:var(--radius-cell)]"
     >
-      <span aria-hidden className="size-2 shrink-0 animate-pulse rounded-full bg-[#d92d20]" />
+      <span aria-hidden className="size-2 shrink-0 animate-pulse rounded-full bg-live" />
       <span>{count > 1 ? `Gravando ${count}` : "Gravando"}</span>
       <span className="font-mono text-[0.75rem] [font-variant-numeric:tabular-nums]">{formatElapsed(now - since)}</span>
     </button>

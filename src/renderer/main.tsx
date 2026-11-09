@@ -1,7 +1,3 @@
-import "@fontsource-variable/archivo";
-import "@fontsource/spline-sans-mono/400.css";
-import "@fontsource/spline-sans-mono/500.css";
-import "@fontsource/spline-sans-mono/600.css";
 import "./styles/globals.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

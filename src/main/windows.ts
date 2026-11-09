@@ -14,17 +14,19 @@ import type { SharingState } from "../shared/ipc";
 import { appImage } from "./icons";
 import { APP_ORIGIN, DEV_SERVER_URL, isAppUrl } from "./security";
 import { getSettings } from "./settings";
+import { hwndOf, pinNative, unpinNative } from "./topmost";
 
 /** Altura da barra superior (e dos botões de janela sobrepostos). */
 export const TITLE_BAR_HEIGHT = 48;
 
 const COLORS = {
-  light: { sheet: "#ffffff", ink: "#16171a", paper: "#fafaf9" },
-  dark: { sheet: "#131315", ink: "#ededee", paper: "#0b0b0c" },
+  light: { sheet: "#ffffff", ink: "#0f111a", paper: "#f4f5f7" },
+  dark: { sheet: "#12141b", ink: "#eceef4", paper: "#0a0b10" },
 } as const;
 
 let mainWindow: BrowserWindow | null = null;
-let effectiveTheme: "light" | "dark" = nativeTheme.shouldUseDarkColors ? "dark" : "light";
+// O padrão é claro; o renderer corrige na carga se a pessoa escolheu outro.
+let effectiveTheme: "light" | "dark" = "light";
 
 export function pageUrl(): string {
   if (DEV_SERVER_URL) return `${DEV_SERVER_URL.replace(/\/$/, "")}/`;
@@ -135,19 +137,35 @@ export function openChatLink(raw: string): void {
 }
 
 const keepOnTop = new WeakMap<BrowserWindow, () => void>();
+const nativePinned = new WeakMap<BrowserWindow, number>();
 
 /**
  * "Sempre no topo" de verdade, inclusive sobre jogo em janela ou tela cheia
  * sem bordas. Um jogo que também se põe no topo passa na frente ao ganhar o
- * foco; por isso, a cada perda de foco a janela reafirma o topo. Tela cheia
- * EXCLUSIVA (DirectX) não deixa nenhuma janela por cima — isso é do Windows.
+ * foco — e faz isso DEPOIS que a janela flutuante perdeu o foco (ou sem que
+ * ela tenha tido foco nenhum). Por isso o vigia nativo escuta a troca de
+ * primeiro plano do sistema inteiro e reafirma o topo logo em seguida
+ * (native/src/topmost.rs). Sem o addon, fica o plano B: reafirmar ao perder
+ * o foco. Tela cheia EXCLUSIVA (DirectX, sem as otimizações de tela cheia do
+ * Windows) não deixa nenhuma janela por cima — isso é do sistema.
  */
 function setPinnedOnTop(win: BrowserWindow, on: boolean): void {
   const prev = keepOnTop.get(win);
   if (prev) win.off("blur", prev);
   keepOnTop.delete(win);
+  const pinnedHwnd = nativePinned.get(win);
+  if (pinnedHwnd !== undefined) {
+    unpinNative(win, pinnedHwnd);
+    nativePinned.delete(win);
+  }
   win.setAlwaysOnTop(on, "screen-saver");
   if (!on) return;
+  if (pinNative(win)) {
+    const hwnd = hwndOf(win);
+    nativePinned.set(win, hwnd);
+    win.once("closed", () => unpinNative(win, hwnd));
+    return;
+  }
   const reassert = () => {
     if (win.isDestroyed() || !win.isAlwaysOnTop()) return;
     win.setAlwaysOnTop(true, "screen-saver");

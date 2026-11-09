@@ -18,7 +18,7 @@ export function Sheet({
   return (
     <Tag
       className={cn(
-        "border border-rule bg-sheet shadow-lift [border-radius:var(--radius-sheet)]",
+        "bg-sheet shadow-lift [border-radius:var(--radius-sheet)]",
         className,
       )}
     >

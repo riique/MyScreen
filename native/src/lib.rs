@@ -7,6 +7,7 @@ pub mod capture;
 pub mod dsp;
 pub mod elevate;
 pub mod input;
+pub mod topmost;
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -457,4 +458,21 @@ pub fn connect_parent_pipe(path: String, server_pid: u32, on_line: Function<Stri
         })
         .map_err(|e| Error::from_reason(e.to_string()))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------- janelas flutuantes
+
+/// Mantém a janela `hwnd` acima de tudo, inclusive de jogo que se põe no
+/// topo ao ganhar o foco. Liga o vigia na primeira chamada.
+#[cfg(windows)]
+#[napi]
+pub fn pin_topmost(hwnd: i64) -> Result<()> {
+    topmost::sys::pin(hwnd as isize).map_err(Error::from_reason)
+}
+
+/// Solta a janela; sem nenhuma fixada, o vigia para.
+#[cfg(windows)]
+#[napi]
+pub fn unpin_topmost(hwnd: i64) {
+    topmost::sys::unpin(hwnd as isize);
 }

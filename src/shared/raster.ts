@@ -1,8 +1,6 @@
 /**
- * Ícones desenhados em código: o app não tem identidade visual além do nome
- * (PRODUCT.md), então o ícone é o quadrado azul de líder com uma tela e
- * barras de som, como o do MyScreen Áudio. Rasterizado por distância com
- * supersampling 4×4 — sem dependência de imagem.
+ * Ícones desenhados em código, a partir da marca em brand/mark.svg.
+ * Rasterizado por distância com supersampling 4×4 — sem dependência de imagem.
  *
  * Saída RGBA, linha a linha. Usado pelo processo principal (bandeja, janela,
  * botões da miniatura) e pelo script que gera o `.ico` do instalador.
@@ -12,9 +10,10 @@ type Rgba = [number, number, number, number];
 type Sdf = (x: number, y: number) => number;
 type Layer = { sdf: Sdf; color: Rgba; erase?: boolean };
 
-const SIGNAL: Rgba = [0x1b, 0x3a, 0x7d, 255];
+const INK: Rgba = [0x0f, 0x11, 0x1a, 255];
+const LIVE: Rgba = [0xe0, 0x36, 0x2c, 255];
 const WHITE: Rgba = [255, 255, 255, 255];
-const ALERT: Rgba = [0xc2, 0x3b, 0x2a, 255];
+const ALERT: Rgba = LIVE;
 
 function roundRect(cx: number, cy: number, hw: number, hh: number, r: number): Sdf {
   return (x, y) => {
@@ -94,22 +93,19 @@ function rasterize(size: number, layers: Layer[]): Uint8Array {
   return px;
 }
 
-/** O ícone do app: quadrado azul, tela branca com três barras de som. */
+/**
+ * O ícone do app — o selo do canal: quadrado de tinta, a tela em traço branco
+ * e o ponto vermelho de "no ar" sentado no canto dela, separado por um vão de
+ * tinta. O mesmo desenho de brand/mark.svg (grade de 64).
+ */
 export function appIcon(size: number): Uint8Array {
-  const bars = [0.45, 0.8, 0.6];
+  const u = (n: number) => n / 64;
   const layers: Layer[] = [
-    { sdf: roundRect(0.5, 0.5, 0.5, 0.5, 0.2), color: SIGNAL },
-    // Moldura da tela.
-    { sdf: stroke(roundRect(0.5, 0.44, 0.3, 0.2, 0.05), 0.07), color: WHITE },
-    // Pé.
-    { sdf: segment(0.5, 0.66, 0.5, 0.74, 0.03), color: WHITE },
-    { sdf: segment(0.38, 0.76, 0.62, 0.76, 0.03), color: WHITE },
+    { sdf: roundRect(0.5, 0.5, 0.5, 0.5, u(16)), color: INK },
+    { sdf: stroke(roundRect(0.5, 0.5, u(15.5), u(10.5), u(3.5)), u(5)), color: WHITE },
+    { sdf: circle(u(47), u(19), u(9.5)), color: INK },
+    { sdf: circle(u(47), u(19), u(7)), color: LIVE },
   ];
-  bars.forEach((h, i) => {
-    const x = 0.4 + i * 0.1;
-    const half = 0.12 * h;
-    layers.push({ sdf: segment(x, 0.44 - half, x, 0.44 + half, 0.028), color: WHITE });
-  });
   return rasterize(size, layers);
 }
 

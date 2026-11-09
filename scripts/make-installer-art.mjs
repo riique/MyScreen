@@ -1,6 +1,6 @@
 // Gera build/installerSidebar.bmp (164×314, BMP 24 bits — o formato que o NSIS
-// aceita) para as telas de boas-vindas e conclusão do instalador. Azul da marca
-// (--color-signal) em degradê, grade de pontos discreta e o ícone do app.
+// aceita) para as telas de boas-vindas e conclusão do instalador. Tinta da marca
+// (--color-ink) em degradê, grade de pontos discreta e o ícone do app.
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as esbuild from "esbuild";
 
@@ -17,8 +17,8 @@ const { appIcon } = await import(
 
 const W = 164;
 const H = 314;
-const TOP = [0x1b, 0x3a, 0x7d]; // --color-signal
-const BOTTOM = [0x10, 0x22, 0x4a]; // um tom abaixo de --color-signal-2
+const TOP = [0x1c, 0x1f, 0x2b]; // tinta um passo acima de --color-ink
+const BOTTOM = [0x0a, 0x0b, 0x10]; // o chão do tema escuro
 const px = new Float64Array(W * H * 3);
 
 const mix = (a, b, t) => a + (b - a) * t;

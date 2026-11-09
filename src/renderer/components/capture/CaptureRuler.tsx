@@ -1,5 +1,9 @@
 
+import { useEffect, useState } from "react";
 import { Choice } from "@/components/sheet";
+import { probeEncoders } from "@/lib/codecProbe";
+import { chooseScreenCodec, type CodecChoice } from "@shared/codec";
+import { RESOLUTION } from "@shared/media";
 import type { CaptureSettings } from "./capturePrefs";
 
 /**
@@ -18,6 +22,23 @@ const FRAME_RATES = [
   { value: "30", label: "30" },
   { value: "60", label: "60" },
 ] as const;
+
+/** A escolha de codec que valeria para estas configurações nesta máquina. */
+export function useCodecChoice(settings: CaptureSettings): CodecChoice | null {
+  const [choice, setChoice] = useState<CodecChoice | null>(null);
+  const { width, height } = RESOLUTION[settings.resolution];
+  const fps = Number(settings.frameRate);
+  useEffect(() => {
+    let alive = true;
+    void probeEncoders(width, height, fps).then((probe) => {
+      if (alive) setChoice(chooseScreenCodec("auto", probe));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [width, height, fps]);
+  return choice;
+}
 
 /**
  * O que a combinação faz com o encoder, em uma frase. O conteúdo é sempre
@@ -59,6 +80,7 @@ export function CaptureRuler({
   onChange: (next: Partial<CaptureSettings>) => void;
   showConsequence?: boolean;
 }) {
+  const codec = useCodecChoice(settings);
   return (
     <>
       <div className="grid grid-cols-[3fr_2fr] border-b border-rule">
@@ -87,8 +109,8 @@ export function CaptureRuler({
             />
           ))}
         </Column>
-
       </div>
+
 
       {showConsequence ? (
         <p
@@ -96,6 +118,7 @@ export function CaptureRuler({
           aria-live="polite"
         >
           {consequence(settings)}
+          {codec ? <span className="mt-1 block text-ink-2">{codec.reason}</span> : null}
         </p>
       ) : null}
     </>

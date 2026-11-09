@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Logo } from "@/components/Logo";
 import { cn } from "@/lib/utils";
 
 /**
@@ -6,7 +7,16 @@ import { cn } from "@/lib/utils";
  * a área de arrastar. Os botões nativos do Windows ficam sobrepostos à direita
  * (`titlebar-pad` reserva o espaço deles).
  */
-export function AppBar({ children, className }: { children?: ReactNode; className?: string }) {
+export function AppBar({
+  children,
+  className,
+  live = false,
+}: {
+  children?: ReactNode;
+  className?: string;
+  /** Você está transmitindo: o ponto do selo respira. */
+  live?: boolean;
+}) {
   return (
     <header
       className={cn(
@@ -14,9 +24,7 @@ export function AppBar({ children, className }: { children?: ReactNode; classNam
         className,
       )}
     >
-      <span className="text-[1rem] font-semibold tracking-[-0.02em] text-ink">
-        My<span className="text-signal">Screen</span>
-      </span>
+      <Logo live={live} />
       <div className="flex min-w-0 items-center gap-1">{children}</div>
     </header>
   );
