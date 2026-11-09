@@ -1,0 +1,176 @@
+/* GERADO por MyScreen-app/scripts/sync-brand.mjs a partir de brand/tokens.css — não edite aqui. */
+/* ============================================================================
+   MyScreen — tokens da marca (fonte única)
+
+   Este arquivo é a fonte da identidade para o app (MyScreen-app) e para o
+   site (MyScreen). O site recebe uma cópia por `npm run brand:sync`; não
+   edite a cópia.
+
+   O mundo: o seu próprio canal. Uma emissora sóbria, de tinta quase preta
+   sobre branco frio, com exatamente uma cor de verdade — o vermelho do "no
+   ar" — que só aparece quando alguém está transmitindo e no ponto do logo.
+   O resto é monocromático de propósito: a tela compartilhada é a única coisa
+   colorida que importa, e a moldura não compete com ela.
+
+   Papéis:
+   - paper/sheet/band: o chão, a superfície e os recuos dentro dela.
+   - ink 1–3: texto (ink-3 é o mais claro que ainda passa 4.5:1); ink-4 é só
+     fio e borda, nunca texto.
+   - signal: a ação primária e a seleção. É tinta (quase preto no claro,
+     quase branco no escuro), não uma segunda cor de marca.
+   - live: NO AR. Transmitindo, gravando, quem compartilha, o ponto do logo.
+     Nunca enfeite, nunca botão comum.
+   - alert/warn: algo travou / algo merece atenção.
+   ========================================================================== */
+@theme {
+  /* --- Superfícies --- */
+  --color-paper: #f4f5f7;
+  --color-sheet: #ffffff;
+  --color-band: #f8f9fa;
+  --color-band-2: #eef0f3;
+
+  /* --- Tinta --- */
+  --color-ink: #0f111a; /* 18.6:1 na superfície */
+  --color-ink-2: #464c5e; /* 8.6:1 */
+  --color-ink-3: #656b7e; /* 5.3:1 na superfície, 4.9:1 no chão */
+  --color-ink-4: #a2a7b6; /* só fio e borda; NUNCA texto */
+
+  /* --- Fios --- */
+  --color-rule: #e6e8ed;
+  --color-rule-2: #d3d7df;
+  --color-rule-3: #a9afbd;
+
+  /* --- Sinal: a ação primária, em tinta --- */
+  --color-signal: #0f111a;
+  --color-signal-2: #2a2f3d; /* hover/pressionado */
+  --color-signal-wash: #eef0f4; /* seleção */
+  --color-signal-wash-2: #e4e7ed;
+  --color-signal-line: #c5cad6;
+  --color-on-signal: #ffffff;
+
+  /* --- No ar --- */
+  --color-live: #e0362c; /* 4.6:1 na superfície; texto só em peso 500+ */
+  --color-live-2: #c42a21;
+  --color-live-wash: #fdeeec;
+  --color-live-line: #f4b9b3;
+  --color-on-live: #ffffff;
+
+  /* --- Atenção --- */
+  --color-alert: #a3241a;
+  --color-alert-line: #efc3be;
+  --color-alert-line-2: #d9887f;
+  --color-alert-wash: #fdf2f1;
+  --color-alert-wash-2: #f9e3e0;
+  --color-warn: #8a5a12;
+  --color-warn-dot: #d39a2e;
+  --color-ok: #1f7a4d;
+
+  /* --- O monitor: atrás de vídeo, sempre escuro --- */
+  --color-monitor: #0b0c11;
+  --color-monitor-ink: #9399a8;
+
+  /* --- Profundidade: uma sombra curta de contato e uma longa de difusão --- */
+  --shadow-lift: 0 1px 2px rgb(15 17 26 / 0.05), 0 8px 24px -12px rgb(15 17 26 / 0.12);
+  --shadow-overlay: 0 1px 3px rgb(15 17 26 / 0.06), 0 24px 64px -16px rgb(15 17 26 / 0.28);
+  --shadow-dock: 0 1px 2px rgb(15 17 26 / 0.06), 0 12px 32px -12px rgb(15 17 26 / 0.22);
+  --color-scrim: rgb(15 17 26 / 0.36);
+
+  /* --- Tipografia: Geist e Geist Mono --- */
+  --font-sans: "Geist Variable", "Geist", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "Cascadia Mono", monospace;
+
+  /* --- Forma --- */
+  --radius-sheet: 14px;
+  --radius-cell: 9px;
+  --radius-pill: 9999px;
+
+  /* --- Ritmo --- */
+  --spacing-band: 2.25rem;
+  --spacing-cell: 0.5rem;
+
+  /* --- Movimento: uma curva, três durações --- */
+  --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-quick: 140ms;
+  --duration-base: 220ms;
+  --duration-slow: 420ms;
+}
+
+:root {
+  color-scheme: light;
+}
+
+/* O escuro é o mesmo canal à noite: o chão quase preto, a superfície sobe um
+   passo de luz em vez de projetar sombra, e o sinal inverte para tinta clara. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-paper: #0a0b10;
+  --color-sheet: #12141b;
+  --color-band: #161921;
+  --color-band-2: #1c1f29;
+
+  --color-ink: #eceef4; /* 16.4:1 */
+  --color-ink-2: #a9afbf; /* 8.4:1 */
+  --color-ink-3: #828999; /* 5.2:1 */
+  --color-ink-4: #4b5162;
+
+  --color-rule: #232733;
+  --color-rule-2: #2f3442;
+  --color-rule-3: #4a5164;
+
+  --color-signal: #eceef4;
+  --color-signal-2: #ffffff;
+  --color-signal-wash: #1e222d;
+  --color-signal-wash-2: #262b38;
+  --color-signal-line: #3b4152;
+  --color-on-signal: #0a0b10;
+
+  --color-live: #ff5145;
+  --color-live-2: #ff6e64;
+  --color-live-wash: #2a1312;
+  --color-live-line: #5e2420;
+  --color-on-live: #ffffff;
+
+  --color-alert: #ff9a8f;
+  --color-alert-line: #5c2622;
+  --color-alert-line-2: #84392f;
+  --color-alert-wash: #23110f;
+  --color-alert-wash-2: #2e1613;
+  --color-warn: #e8b968;
+  --color-warn-dot: #e3a63b;
+  --color-ok: #5fd197;
+
+  --color-monitor: #050608;
+  --color-monitor-ink: #828999;
+
+  --shadow-lift: inset 0 1px 0 rgb(255 255 255 / 0.03), 0 12px 32px -16px rgb(0 0 0 / 0.7);
+  --shadow-overlay: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 32px 64px -20px rgb(0 0 0 / 0.85);
+  --shadow-dock: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 16px 40px -16px rgb(0 0 0 / 0.8);
+  --color-scrim: rgb(0 0 0 / 0.6);
+}
+
+/* O ponto "no ar": respira devagar enquanto alguém transmite. É a única
+   animação contínua do produto. */
+@keyframes live-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@layer utilities {
+  .live-dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    background-color: var(--color-live);
+    flex: none;
+  }
+  .live-dot[data-on="true"] {
+    animation: live-breathe 1.8s ease-in-out infinite;
+  }
+}

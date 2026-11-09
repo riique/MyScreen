@@ -1,6 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Choice } from "@/components/sheet";
+import { chooseScreenCodec, type CodecChoice } from "@/lib/codec";
+import { probeEncoders } from "@/lib/codecProbe";
 import type { CaptureSettings } from "./capturePrefs";
 
 /**
@@ -28,6 +31,29 @@ const CONTENT_TYPES = [
   { value: "detail", label: "Texto" },
   { value: "motion", label: "Vídeo e jogos" },
 ] as const;
+
+const SIZE: Record<CaptureSettings["resolution"], [number, number]> = {
+  "720p": [1280, 720],
+  "1080p": [1920, 1080],
+  "4k": [3840, 2160],
+};
+
+/** A escolha de codec que valeria para estas configurações neste navegador. */
+function useCodecChoice(settings: CaptureSettings): CodecChoice | null {
+  const [choice, setChoice] = useState<CodecChoice | null>(null);
+  const [w, h] = SIZE[settings.resolution];
+  const fps = Number(settings.frameRate);
+  useEffect(() => {
+    let alive = true;
+    void probeEncoders(w, h, fps).then((probe) => {
+      if (alive) setChoice(chooseScreenCodec("auto", probe));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [w, h, fps]);
+  return choice;
+}
 
 /**
  * O que a combinação faz com o encoder, em uma frase. O tipo de conteúdo pesa
@@ -73,6 +99,7 @@ export function CaptureRuler({
   onChange: (next: Partial<CaptureSettings>) => void;
   showConsequence?: boolean;
 }) {
+  const codec = useCodecChoice(settings);
   return (
     <>
       <div className="grid grid-cols-2 border-b border-rule md:grid-cols-[1fr_1fr_1.3fr]">
@@ -116,12 +143,14 @@ export function CaptureRuler({
         </Column>
       </div>
 
+
       {showConsequence ? (
         <p
           className="px-5 py-3 text-[0.8125rem] leading-[1.5] text-ink-3 [text-wrap:pretty] sm:px-6"
           aria-live="polite"
         >
           {consequence(settings)}
+          {codec ? <span className="mt-1 block text-ink-2">{codec.reason}</span> : null}
         </p>
       ) : null}
     </>

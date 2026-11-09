@@ -49,6 +49,8 @@ import { ShareDialog } from "./ShareDialog";
 import { openCompanionAudio, readCompanion, type CompanionAudio } from "./companionAudio";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
+import { chooseScreenCodec, isSvcCodec, type CodecProbe } from "@/lib/codec";
+import { probeEncoders } from "@/lib/codecProbe";
 import {
   Activity,
   Check,
@@ -276,6 +278,12 @@ function ConferenceStage({
   // `applyMediaSettings` é async e lê a régua no momento da aplicação; sem um
   // espelho síncrono, dois ajustes seguidos partiriam do mesmo estado velho.
   const settingsRef = useRef<MediaSettings>(settings);
+  const encoderProbe = useRef<CodecProbe | null>(null);
+  useEffect(() => {
+    void probeEncoders().then((p) => {
+      encoderProbe.current = p;
+    });
+  }, []);
 
   const [panel, setPanel] = useState<Panel | null>(null);
 
@@ -480,12 +488,27 @@ function ConferenceStage({
 
     const { width, height } = RESOLUTION[current.screenResolution];
     const contentHint = current.screenContentType === "detail" ? "detail" : "motion";
+    // A sondagem já rodou ao abrir a sala: esperar por ela aqui quebraria o
+    // gesto do usuário que o `getDisplayMedia` exige. Sem resposta, VP8.
+    const codec = encoderProbe.current
+      ? chooseScreenCodec("auto", encoderProbe.current)
+      : null;
     const publishOptions: TrackPublishOptions = {
       screenShareEncoding: {
         maxBitrate: screenBitrate(current.screenResolution, current.screenFps),
         maxFramerate: current.screenFps,
         priority: "high",
       },
+      ...(codec
+        ? {
+            videoCodec: codec.codec,
+            // AV1/VP9: uma camada espacial (a tela inteira) e três temporais;
+            // quem não decodifica recebe o codec reserva.
+            ...(isSvcCodec(codec.codec)
+              ? { scalabilityMode: "L1T3" as const, backupCodec: { codec: codec.backup ?? "vp8" } }
+              : { backupCodec: false }),
+          }
+        : {}),
       // Uma camada só: quem assiste recebe sempre a tela inteira, sem versão
       // reduzida que o SFU pudesse escolher no lugar dela.
       simulcast: false,

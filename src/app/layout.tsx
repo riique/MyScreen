@@ -1,35 +1,35 @@
 import type { Metadata, Viewport } from "next";
-import { Archivo, Spline_Sans_Mono } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Navbar } from "@/components/Navbar";
 import { themeBootScript } from "@/components/theme";
 
 /**
- * Duas faces, um trabalho cada. Archivo tem osso de grotesk impressa e Caps que
- * aguentam a coluna; Spline Sans Mono tem algarismo tabular de verdade, que e o
- * que segura valor de coluna numa folha pautada. Nenhuma das duas e fallback de
- * sistema: a voz da pagina e delas.
+ * Geist para a interface e Geist Mono para todo valor medido (FPS, bitrate,
+ * ids). As variáveis alimentam --font-sans/--font-mono em brand-tokens.css.
  */
-const archivo = Archivo({
-  subsets: ["latin"],
-  variable: "--font-archivo",
+const geist = Geist({
+  subsets: ["latin", "latin-ext"],
+  variable: "--font-geist",
   display: "swap",
 });
 
-const splineMono = Spline_Sans_Mono({
+const geistMono = Geist_Mono({
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  variable: "--font-spline-mono",
+  variable: "--font-geist-mono",
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "MyScreen — Transmissão de Tela, Câmera e Áudio em Tempo Real",
-  description:
-    "Plataforma completa de transmissão de tela de alta taxa de quadros e áudio do sistema com câmera concomitante.",
+  title: "MyScreen",
+  description: "Sua tela, com o som do PC, a 60 FPS, no seu próprio servidor.",
 };
 
 export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f4f5f7" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0b10" },
+  ],
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -39,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="pt-BR"
-      className={`${archivo.variable} ${splineMono.variable}`}
+      className={`${geist.variable} ${geistMono.variable}`}
       // O script de tema escreve `data-theme` antes da hidratação.
       suppressHydrationWarning
     >
