@@ -1,0 +1,110 @@
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { AUDIO_PORT_MESSAGE, type DesktopBridge } from "../shared/ipc";
+
+/**
+ * A ponte `window.myscreen`: funções estreitas sobre o IPC. O renderer nunca
+ * vê o `ipcRenderer`.
+ */
+
+function subscribe<T extends unknown[]>(channel: string, cb: (...args: T) => void): () => void {
+  const listener = (_event: IpcRendererEvent, ...args: unknown[]) => cb(...(args as T));
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
+// A MessagePort do PCM não atravessa o contextBridge: vai por postMessage
+// para o mundo principal, que a entrega ao AudioWorklet.
+ipcRenderer.on("audio:port", (event, id: string) => {
+  window.postMessage({ type: AUDIO_PORT_MESSAGE, id }, "*", event.ports);
+});
+
+const bridge: DesktopBridge = {
+  app: {
+    info: () => ipcRenderer.invoke("app:info"),
+    consumePendingRoom: () => ipcRenderer.invoke("app:consumePendingRoom"),
+    onNavigate: (cb) => subscribe("app:navigate", cb),
+    setTheme: (effective, preference) => ipcRenderer.send("app:setTheme", effective, preference),
+    openPrivacySettings: (kind) => ipcRenderer.send("app:openPrivacy", kind),
+    openExternal: (url) => ipcRenderer.send("app:openExternal", url),
+    openLink: (url) => ipcRenderer.send("app:openLink", url),
+  },
+  settings: {
+    get: () => ipcRenderer.invoke("settings:get"),
+    set: (patch) => ipcRenderer.invoke("settings:set", patch),
+  },
+  api: {
+    createRoom: (input) => ipcRenderer.invoke("api:createRoom", input),
+    getRoom: (id) => ipcRenderer.invoke("api:getRoom", id),
+    token: (input) => ipcRenderer.invoke("api:token", input),
+    desktopInfo: () => ipcRenderer.invoke("api:desktopInfo"),
+    listSounds: () => ipcRenderer.invoke("api:listSounds"),
+    fetchSound: (id) => ipcRenderer.invoke("api:fetchSound", id),
+    uploadSound: (roomToken, name, bytes) => ipcRenderer.invoke("api:uploadSound", roomToken, name, bytes),
+    chatHistory: (roomId, roomToken) => ipcRenderer.invoke("api:chatHistory", roomId, roomToken),
+    chatUploadFile: (roomId, roomToken, file) => ipcRenderer.invoke("api:chatUploadFile", roomId, roomToken, file),
+    chatAppend: (roomId, roomToken, msg) => ipcRenderer.invoke("api:chatAppend", roomId, roomToken, msg),
+    chatDelete: (roomId, roomToken, messageId) => ipcRenderer.invoke("api:chatDelete", roomId, roomToken, messageId),
+    chatFile: (roomId, roomToken, fileId) => ipcRenderer.invoke("api:chatFile", roomId, roomToken, fileId),
+  },
+  capture: {
+    list: () => ipcRenderer.invoke("capture:list"),
+    select: (id, options) => ipcRenderer.invoke("capture:select", id, options),
+  },
+  audio: {
+    capabilities: () => ipcRenderer.invoke("audio:capabilities"),
+    start: (id, mode, options) => ipcRenderer.invoke("audio:start", id, mode, options),
+    update: (patch) => ipcRenderer.send("audio:update", patch),
+    stop: () => ipcRenderer.send("audio:stop"),
+    onLevel: (cb) => subscribe("audio:level", cb),
+    onLost: (cb) => subscribe("audio:lost", cb),
+    onError: (cb) => subscribe("audio:error", cb),
+  },
+  room: {
+    setState: (state) => ipcRenderer.send("room:setState", state),
+    setSharing: (state) => ipcRenderer.send("room:setSharing", state),
+    notify: (title, body) => ipcRenderer.send("room:notify", title, body),
+    onShortcut: (cb) => subscribe("room:shortcut", cb),
+    onLeaveRequest: (cb) => subscribe("room:leave", cb),
+    onStopShareRequest: (cb) => subscribe("room:stopShare", cb),
+    onAudioPauseChanged: (cb) => subscribe("room:audioPaused", cb),
+  },
+  remote: {
+    capabilities: () => ipcRenderer.invoke("remote:capabilities"),
+    control: (from, msg) => ipcRenderer.send("remote:control", from, msg),
+    input: (from, bytes) => ipcRenderer.send("remote:input", from, bytes),
+    decide: (reqId, allow) => ipcRenderer.send("remote:decide", reqId, allow),
+    peerSeen: (identity, sid) => ipcRenderer.send("remote:peerSeen", identity, sid),
+    peerGone: (identity) => ipcRenderer.send("remote:peerGone", identity),
+    roomLost: () => ipcRenderer.send("remote:roomLost"),
+    stop: () => ipcRenderer.send("remote:stop"),
+    pause: (paused) => ipcRenderer.send("remote:pause", paused),
+    elevate: () => ipcRenderer.invoke("remote:elevate"),
+    stopAdmin: () => ipcRenderer.send("remote:stopAdmin"),
+    onAdmin: (cb) => subscribe("remote:admin", cb),
+    captureKeys: (on) => ipcRenderer.send("remote:captureKeys", on),
+    readClipboard: () => ipcRenderer.invoke("remote:readClipboard"),
+    readClipboardRich: (lastKey) => ipcRenderer.invoke("remote:readClipboardRich", lastKey),
+    deliverClip: (from, clip) => ipcRenderer.send("remote:deliverClip", from, clip),
+    onHookKey: (cb) => subscribe("remote:hookKey", cb),
+    onHookState: (cb) => subscribe("remote:hookState", cb),
+    onSend: (cb) => subscribe("remote:send", cb),
+    onConsent: (cb) => subscribe("remote:consent", cb),
+    onConsentClosed: (cb) => subscribe("remote:consentClosed", cb),
+    onSession: (cb) => subscribe("remote:session", cb),
+  },
+  recording: {
+    open: (label, ext) => ipcRenderer.invoke("recording:open", label, ext),
+    write: (id, bytes) => ipcRenderer.send("recording:write", id, bytes),
+    close: (id) => ipcRenderer.invoke("recording:close", id),
+    reveal: (file) => ipcRenderer.send("recording:reveal", file),
+  },
+  updates: {
+    status: () => ipcRenderer.invoke("updates:status"),
+    onStatus: (cb) => subscribe("updates:status", cb),
+    check: () => ipcRenderer.send("updates:check"),
+    download: () => ipcRenderer.send("updates:download"),
+    install: () => ipcRenderer.send("updates:install"),
+  },
+};
+
+contextBridge.exposeInMainWorld("myscreen", bridge);

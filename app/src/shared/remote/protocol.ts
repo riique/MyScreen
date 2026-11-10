@@ -1,0 +1,419 @@
+/**
+ * Protocolo do controle remoto (seção 5 de CONTROLE-REMOTO.md). Puro: roda no
+ * renderer dos dois lados e no processo principal, e é testado sem Electron.
+ *
+ * - `myscreen.rc.ctl`: controle, JSON UTF-8, sempre confiável.
+ * - `myscreen.rc.in`: input, binário compacto. Movimento vai com perda; o
+ *   resto, confiável. Todo evento de mouse carrega a própria coordenada, então
+ *   um clique que chega antes do movimento que o precede cai no lugar certo.
+ *
+ * Todo pacote sai com `destinationIdentities` do outro lado: tecla digitada
+ * nunca vai para a sala inteira.
+ */
+
+export const RC_VERSION = 1;
+export const TOPIC_CTL = "myscreen.rc.ctl";
+export const TOPIC_IN = "myscreen.rc.in";
+/**
+ * Imagem ou arquivos copiados em quem controla, para colar no PC controlado.
+ * Vai por byte stream (um por arquivo), só para o controlado, com atributos
+ * `CLIP_ATTR`. O texto continua no `rc.in` (pacote CLIP), que é ordenado com
+ * as teclas.
+ */
+export const TOPIC_CLIP = "myscreen.rc.clip";
+export const CLIP_ATTR = { session: "rc.session", clip: "rc.clip", kind: "rc.kind", index: "rc.index", count: "rc.count" } as const;
+/** Teto somado de uma área de transferência de imagem/arquivos. */
+export const MAX_CLIP_FILES_BYTES = 100 * 1024 * 1024;
+export const MAX_CLIP_FILES = 50;
+
+/** Atributos de participante que anunciam quem pode ser controlado. */
+export const ATTR_VERSION = "rc.v";
+export const ATTR_DISPLAY = "rc.display";
+export const ATTR_BY = "rc.by";
+export const ATTR_UAC = "rc.uac";
+
+/** Pedido sem resposta vira recusa. */
+export const CONSENT_TIMEOUT_MS = 30_000;
+/** Depois de recusar, a mesma identidade espera isto para pedir de novo. */
+export const REQUEST_COOLDOWN_MS = 30_000;
+
+export type DenyReason = "refused" | "timeout" | "busy" | "disabled" | "not-sharing" | "cooldown";
+export type RevokeReason = "user" | "share-ended" | "left" | "reconnected" | "locked" | "panic" | "error";
+/** `protected`: o MyScreen da pessoa controlada está em primeiro plano e as teclas não entram. */
+export type PauseWhy = "local-input" | "locked" | "elevated" | "user" | "protected";
+export const TOPIC_UAC_FRAME = "myscreen.rc.uac";
+export const MAX_UAC_FRAME_BYTES = 256 * 1024;
+export type AdminStatus = "waiting" | "enabled" | "refused" | "unavailable" | "revoked";
+
+export type Ctl =
+  | { t: "request"; v: number; reqId: string }
+  | { t: "cancel"; reqId: string }
+  | { t: "grant"; reqId: string; sessionId: string; trackSid: string; width: number; height: number; admin?: true }
+  | { t: "deny"; reqId: string; reason: DenyReason }
+  | { t: "revoke"; sessionId: string; reason: RevokeReason }
+  | { t: "state"; sessionId: string; paused: boolean; why?: PauseWhy }
+  /** Um clique caiu numa janela do MyScreen escondida da transmissão e não entrou. */
+  | { t: "blocked"; sessionId: string }
+  /** O PC controlado pôs (ok) ou não a imagem/arquivos na área de transferência. */
+  | { t: "clip"; sessionId: string; clipId: string; ok: boolean }
+  | { t: "admin-request"; sessionId: string; publicKey: string }
+  | { t: "admin-stop"; sessionId: string }
+  | { t: "admin-status"; sessionId: string; status: AdminStatus }
+  | { t: "admin-view"; sessionId: string; desktop: "normal" | "local" }
+  | { t: "admin-view"; sessionId: string; desktop: "prompt"; generation: number; publicKey: string }
+  | { t: "admin-click"; sessionId: string; generation: number; x: number; y: number }
+  | { t: "ping"; sessionId: string; n: number }
+  | { t: "pong"; sessionId: string; n: number };
+
+const DENY: readonly DenyReason[] = ["refused", "timeout", "busy", "disabled", "not-sharing", "cooldown"];
+const REVOKE: readonly RevokeReason[] = ["user", "share-ended", "left", "reconnected", "locked", "panic", "error"];
+const WHY: readonly PauseWhy[] = ["local-input", "locked", "elevated", "user", "protected"];
+
+/** 16 bytes aleatórios em base64url (22 caracteres). */
+const ID_RE = /^[A-Za-z0-9_-]{22}$/;
+const MAX_CTL_BYTES = 1024;
+
+export function isId(v: unknown): v is string {
+  return typeof v === "string" && ID_RE.test(v);
+}
+
+export function randomId(): string {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Os 4 primeiros bytes do `sessionId`, como u32: vai em todo pacote de input. */
+export function sessionTag(sessionId: string): number {
+  const b64 = sessionId.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64.slice(0, 8));
+  return ((bin.charCodeAt(0) << 24) | (bin.charCodeAt(1) << 16) | (bin.charCodeAt(2) << 8) | bin.charCodeAt(3)) >>> 0;
+}
+
+function isUint(v: unknown, max: number): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= max;
+}
+
+function isTrackSid(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0 && v.length <= 64 && /^[A-Za-z0-9_-]+$/.test(v);
+}
+
+function isUacPublicKey(value: unknown): value is string {
+  return typeof value === "string" && /^B[A-Za-z0-9_-]{86}$/.test(value);
+}
+
+/**
+ * Valida uma mensagem de controle. Esquema estrito: tipo, cada campo e nada
+ * além do tamanho máximo. Qualquer desvio devolve null (e é ignorado).
+ */
+export function parseCtl(input: Uint8Array | unknown): Ctl | null {
+  let raw: unknown = input;
+  if (input instanceof Uint8Array) {
+    if (input.byteLength === 0 || input.byteLength > MAX_CTL_BYTES) return null;
+    try {
+      raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(input));
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const m = raw as Record<string, unknown>;
+  switch (m.t) {
+    case "request":
+      return isUint(m.v, 1000) && isId(m.reqId) ? { t: "request", v: m.v, reqId: m.reqId } : null;
+    case "cancel":
+      return isId(m.reqId) ? { t: "cancel", reqId: m.reqId } : null;
+    case "grant":
+      return isId(m.reqId) && isId(m.sessionId) && isTrackSid(m.trackSid) && isUint(m.width, 100_000) && isUint(m.height, 100_000)
+        ? { t: "grant", reqId: m.reqId, sessionId: m.sessionId, trackSid: m.trackSid, width: m.width, height: m.height,
+          ...(m.admin === true ? { admin: true as const } : {}) }
+        : null;
+    case "deny":
+      return isId(m.reqId) && DENY.includes(m.reason as DenyReason)
+        ? { t: "deny", reqId: m.reqId, reason: m.reason as DenyReason }
+        : null;
+    case "revoke":
+      return isId(m.sessionId) && REVOKE.includes(m.reason as RevokeReason)
+        ? { t: "revoke", sessionId: m.sessionId, reason: m.reason as RevokeReason }
+        : null;
+    case "state": {
+      if (!isId(m.sessionId) || typeof m.paused !== "boolean") return null;
+      if (m.why !== undefined && !WHY.includes(m.why as PauseWhy)) return null;
+      const msg: Ctl = { t: "state", sessionId: m.sessionId, paused: m.paused };
+      if (m.why !== undefined) msg.why = m.why as PauseWhy;
+      return msg;
+    }
+    case "blocked":
+      return isId(m.sessionId) ? { t: "blocked", sessionId: m.sessionId } : null;
+    case "clip":
+      return isId(m.sessionId) && isId(m.clipId) && typeof m.ok === "boolean"
+        ? { t: "clip", sessionId: m.sessionId, clipId: m.clipId, ok: m.ok }
+        : null;
+    case "admin-request":
+      return isId(m.sessionId) && isUacPublicKey(m.publicKey)
+        ? { t: m.t, sessionId: m.sessionId, publicKey: m.publicKey } : null;
+    case "admin-stop":
+      return isId(m.sessionId) ? { t: m.t, sessionId: m.sessionId } : null;
+    case "admin-status":
+      return isId(m.sessionId) && (m.status === "waiting" || m.status === "enabled" || m.status === "refused" ||
+        m.status === "unavailable" || m.status === "revoked")
+        ? { t: m.t, sessionId: m.sessionId, status: m.status } : null;
+    case "admin-view":
+      if (!isId(m.sessionId)) return null;
+      if (m.desktop === "normal" || m.desktop === "local") return { t: m.t, sessionId: m.sessionId, desktop: m.desktop };
+      return m.desktop === "prompt" && isUint(m.generation, 0xffff_ffff) && isUacPublicKey(m.publicKey)
+        ? { t: m.t, sessionId: m.sessionId, desktop: m.desktop, generation: m.generation, publicKey: m.publicKey } : null;
+    case "admin-click":
+      return isId(m.sessionId) && isUint(m.generation, 0xffff_ffff) && isUint(m.x, 65535) && isUint(m.y, 65535)
+        ? { t: m.t, sessionId: m.sessionId, generation: m.generation, x: m.x, y: m.y } : null;
+    case "ping":
+    case "pong":
+      return isId(m.sessionId) && isUint(m.n, 0xffff_ffff) ? { t: m.t, sessionId: m.sessionId, n: m.n } : null;
+    default:
+      return null;
+  }
+}
+
+export function encodeCtl(msg: Ctl): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(JSON.stringify(msg));
+}
+
+// ---------------------------------------------------------------- input binário
+
+export const IN = {
+  MOVE: 0x01,
+  BUTTON: 0x02,
+  WHEEL: 0x03,
+  KEY: 0x04,
+  TEXT: 0x05,
+  RELEASE_ALL: 0x06,
+  CLIP: 0x07,
+} as const;
+
+/** `u8 tipo | u32 sessionTag | u16 seq` */
+export const HEADER_BYTES = 7;
+export const MAX_TEXT_BYTES = 1024;
+export const COORD_MAX = 65535;
+/** Teto da área de transferência inteira (UTF-8), somados os pedaços. */
+export const MAX_CLIP_BYTES = 128 * 1024;
+/** Flags do pedaço de área de transferência. */
+export const CLIP_FIRST = 0x01;
+export const CLIP_LAST = 0x02;
+
+export type InputEvent =
+  | { t: "move"; x: number; y: number }
+  | { t: "button"; button: number; down: boolean; x: number; y: number }
+  | { t: "wheel"; dx: number; dy: number; x: number; y: number }
+  | { t: "key"; scancode: number; down: boolean }
+  | { t: "text"; text: string }
+  /**
+   * Pedaço do texto copiado em quem controla, para colar do outro lado. Vai
+   * em pedaços de até 1 KiB; o PC controlado junta e decodifica no último.
+   */
+  | { t: "clip"; flags: number; bytes: Uint8Array }
+  | { t: "release" };
+
+/** Texto → pedaços `clip`, ou null se passa de `MAX_CLIP_BYTES` (ou é vazio). */
+export function clipChunks(text: string): Extract<InputEvent, { t: "clip" }>[] | null {
+  const all = new TextEncoder().encode(text);
+  if (all.byteLength === 0 || all.byteLength > MAX_CLIP_BYTES) return null;
+  const out: Extract<InputEvent, { t: "clip" }>[] = [];
+  for (let at = 0; at < all.byteLength; at += MAX_TEXT_BYTES) {
+    const end = Math.min(all.byteLength, at + MAX_TEXT_BYTES);
+    const flags = (at === 0 ? CLIP_FIRST : 0) | (end === all.byteLength ? CLIP_LAST : 0);
+    out.push({ t: "clip", flags, bytes: all.subarray(at, end) });
+  }
+  return out;
+}
+
+export type InputPacket = { tag: number; seq: number; ev: InputEvent };
+
+/** Movimento vai pelo canal com perda; o resto, confiável. */
+export function isLossy(ev: InputEvent): boolean {
+  return ev.t === "move";
+}
+
+export function encodeInput(tag: number, seq: number, ev: InputEvent): Uint8Array<ArrayBuffer> {
+  let body: Uint8Array<ArrayBuffer>;
+  let type: number;
+  switch (ev.t) {
+    case "move": {
+      type = IN.MOVE;
+      body = new Uint8Array(4);
+      const v = new DataView(body.buffer);
+      v.setUint16(0, ev.x);
+      v.setUint16(2, ev.y);
+      break;
+    }
+    case "button": {
+      type = IN.BUTTON;
+      body = new Uint8Array(6);
+      const v = new DataView(body.buffer);
+      v.setUint8(0, ev.button);
+      v.setUint8(1, ev.down ? 1 : 0);
+      v.setUint16(2, ev.x);
+      v.setUint16(4, ev.y);
+      break;
+    }
+    case "wheel": {
+      type = IN.WHEEL;
+      body = new Uint8Array(8);
+      const v = new DataView(body.buffer);
+      v.setInt16(0, ev.dx);
+      v.setInt16(2, ev.dy);
+      v.setUint16(4, ev.x);
+      v.setUint16(6, ev.y);
+      break;
+    }
+    case "key": {
+      type = IN.KEY;
+      body = new Uint8Array(3);
+      const v = new DataView(body.buffer);
+      v.setUint16(0, ev.scancode);
+      v.setUint8(2, ev.down ? 1 : 0);
+      break;
+    }
+    case "text":
+      type = IN.TEXT;
+      body = new TextEncoder().encode(ev.text);
+      if (body.byteLength === 0 || body.byteLength > MAX_TEXT_BYTES) throw new RangeError("texto fora do limite");
+      break;
+    case "clip":
+      type = IN.CLIP;
+      if (ev.bytes.byteLength === 0 || ev.bytes.byteLength > MAX_TEXT_BYTES) throw new RangeError("pedaço fora do limite");
+      body = new Uint8Array(1 + ev.bytes.byteLength);
+      body[0] = ev.flags & (CLIP_FIRST | CLIP_LAST);
+      body.set(ev.bytes, 1);
+      break;
+    case "release":
+      type = IN.RELEASE_ALL;
+      body = new Uint8Array(0);
+      break;
+  }
+  const out = new Uint8Array(HEADER_BYTES + body.byteLength);
+  const h = new DataView(out.buffer);
+  h.setUint8(0, type);
+  h.setUint32(1, tag >>> 0);
+  h.setUint16(5, seq & 0xffff);
+  out.set(body, HEADER_BYTES);
+  return out;
+}
+
+const BODY_BYTES: Record<number, number> = {
+  [IN.MOVE]: 4,
+  [IN.BUTTON]: 6,
+  [IN.WHEEL]: 8,
+  [IN.KEY]: 3,
+  [IN.RELEASE_ALL]: 0,
+};
+
+/**
+ * Parser de tamanho exato por tipo. Nunca lança: bytes da rede que não
+ * formam um pacote válido devolvem null.
+ */
+export function decodeInput(bytes: Uint8Array): InputPacket | null {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength < HEADER_BYTES) return null;
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const type = v.getUint8(0);
+  const tag = v.getUint32(1);
+  const seq = v.getUint16(5);
+  const bodyLen = bytes.byteLength - HEADER_BYTES;
+  if (type !== IN.TEXT && type !== IN.CLIP && BODY_BYTES[type] !== bodyLen) return null;
+  const at = HEADER_BYTES;
+  let ev: InputEvent;
+  switch (type) {
+    case IN.MOVE:
+      ev = { t: "move", x: v.getUint16(at), y: v.getUint16(at + 2) };
+      break;
+    case IN.BUTTON: {
+      const button = v.getUint8(at);
+      const down = v.getUint8(at + 1);
+      if (button > 4 || down > 1) return null;
+      ev = { t: "button", button, down: down === 1, x: v.getUint16(at + 2), y: v.getUint16(at + 4) };
+      break;
+    }
+    case IN.WHEEL: {
+      const dx = v.getInt16(at);
+      const dy = v.getInt16(at + 2);
+      if (Math.abs(dx) > WHEEL_MAX || Math.abs(dy) > WHEEL_MAX) return null;
+      ev = { t: "wheel", dx, dy, x: v.getUint16(at + 4), y: v.getUint16(at + 6) };
+      break;
+    }
+    case IN.KEY: {
+      const scancode = v.getUint16(at);
+      const down = v.getUint8(at + 2);
+      if (down > 1 || (scancode & 0xff) === 0 || scancode > 0x1ff) return null;
+      ev = { t: "key", scancode, down: down === 1 };
+      break;
+    }
+    case IN.TEXT: {
+      if (bodyLen === 0 || bodyLen > MAX_TEXT_BYTES) return null;
+      try {
+        ev = { t: "text", text: new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(at)) };
+      } catch {
+        return null;
+      }
+      break;
+    }
+    case IN.CLIP: {
+      if (bodyLen < 2 || bodyLen > MAX_TEXT_BYTES + 1) return null;
+      const flags = v.getUint8(at);
+      if (flags & ~(CLIP_FIRST | CLIP_LAST)) return null;
+      ev = { t: "clip", flags, bytes: bytes.slice(at + 1) };
+      break;
+    }
+    case IN.RELEASE_ALL:
+      ev = { t: "release" };
+      break;
+    default:
+      return null;
+  }
+  return { tag, seq, ev };
+}
+
+/** `a` é posterior a `b` num contador de 16 bits que dá a volta? */
+export function seqNewer(a: number, b: number): boolean {
+  const d = (a - b) & 0xffff;
+  return d !== 0 && d < 0x8000;
+}
+
+// ---------------------------------------------------------------- roda
+
+/** Unidade do Windows: 120 por "dente" da roda. */
+export const WHEEL_DELTA = 120;
+/** Teto por pacote (≈ 16 dentes): mais que isso é rajada, não gesto. */
+export const WHEEL_MAX = WHEEL_DELTA * 16;
+
+/**
+ * Converte `WheelEvent` (pixels, linhas ou páginas; positivo = para baixo)
+ * em unidades do Windows (positivo = para cima), acumulando frações: o
+ * touchpad manda deltas pequenos que, somados, viram rolagem suave.
+ */
+export class WheelAccumulator {
+  private fx = 0;
+  private fy = 0;
+
+  add(deltaX: number, deltaY: number, deltaMode: number): { dx: number; dy: number } {
+    // O Chromium no Windows dá 100 px por dente (escala 100%); 3 linhas por dente.
+    const per = deltaMode === 1 ? WHEEL_DELTA / 3 : deltaMode === 2 ? WHEEL_DELTA * 3 : WHEEL_DELTA / 100;
+    this.fx += deltaX * per;
+    this.fy += -deltaY * per;
+    const dx = Math.trunc(this.fx);
+    const dy = Math.trunc(this.fy);
+    this.fx -= dx;
+    this.fy -= dy;
+    // `+ 0` tira o -0 do trunc.
+    return { dx: clampWheel(dx) + 0, dy: clampWheel(dy) + 0 };
+  }
+
+  reset(): void {
+    this.fx = 0;
+    this.fy = 0;
+  }
+}
+
+function clampWheel(v: number): number {
+  return Math.max(-WHEEL_MAX, Math.min(WHEEL_MAX, v));
+}

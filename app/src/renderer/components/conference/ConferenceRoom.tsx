@@ -1,0 +1,2304 @@
+import {
+  LiveKitRoom,
+  RoomAudioRenderer,
+  isTrackReference,
+  useChat,
+  useConnectionState,
+  useIsMuted,
+  useIsSpeaking,
+  useLocalParticipant,
+  useParticipantAttribute,
+  useParticipants,
+  useRoomContext,
+  useTracks,
+  VideoTrack,
+  type TrackReferenceOrPlaceholder,
+} from "@livekit/components-react";
+import {
+  AudioPresets,
+  ConnectionQuality,
+  ConnectionState,
+  DisconnectReason,
+  LocalAudioTrack,
+  ParticipantEvent,
+  RemoteTrackPublication,
+  RoomEvent,
+  Track,
+  VideoPresets,
+  VideoQuality,
+  supportsAudioOutputSelection,
+  type LocalTrackPublication,
+  type Participant,
+  type RemoteParticipant,
+  type RemoteTrack,
+  type ScreenShareCaptureOptions,
+  type TrackPublishOptions,
+} from "livekit-client";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { AudioCapabilities, CaptureSource, SystemAudioMode } from "@shared/ipc";
+import {
+  CAMERA_BITRATE,
+  DEFAULT_MEDIA_PREFS,
+  RESOLUTION,
+  SCREEN_BITRATE,
+  screenBitrate,
+  type MediaPrefs,
+} from "@shared/media";
+import { ATTR_UAC, ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
+import { ChatSidebar } from "./ChatSidebar";
+import { useRoomChat } from "./useRoomChat";
+import { MediaControls } from "./MediaControls";
+import { ParticipantsList } from "./ParticipantsList";
+import { ParticipantVolume, applySavedVolume } from "./ParticipantVolume";
+import { SettingsModal, type MediaSettings } from "./SettingsModal";
+import { ShareDialog } from "./ShareDialog";
+import { SystemAudioControl } from "./SystemAudioControl";
+import { TrackStatsDropdown } from "./TrackStatsDropdown";
+import { ConsentDialog } from "./remote/ConsentDialog";
+import { ControlOverlay } from "./remote/ControlOverlay";
+import { SecureDesktop } from "./remote/SecureDesktop";
+import { useRemoteAdminHost } from "./remote/useRemoteAdminHost";
+import { ControllingPill, ControlToolbar } from "./remote/ControlToolbar";
+import { PANIC_SHORTCUT_LABEL } from "./remote/labels";
+import { useRemoteControlHost, type HostShare } from "./remote/useRemoteControlHost";
+import { useRemoteControlViewer, type RemoteViewer } from "./remote/useRemoteControlViewer";
+import { formatElapsed } from "@shared/recording";
+import { RecordDialog, useNow, type RecordOption } from "./recording/RecordDialog";
+import { SoundboardControl } from "./soundboard/SoundboardControl";
+import { useSoundboard } from "./soundboard/useSoundboard";
+import { useRecording } from "./recording/useRecording";
+import { writeMediaPrefs } from "@/lib/storage";
+import {
+  readCapture,
+  readSystemAudio,
+  writeCapture,
+  writeSystemAudio,
+  type CaptureSettings,
+  type SystemAudioPrefs,
+} from "@/components/capture/capturePrefs";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { LogoMark } from "@/components/Logo";
+import { buttonClass } from "@/components/sheet";
+import { cn } from "@/lib/utils";
+import { probeEncoders } from "@/lib/codecProbe";
+import { chooseScreenCodec, isSvcCodec } from "@shared/codec";
+import { usePlatform } from "@/platform";
+import {
+  Activity,
+  Check,
+  Columns2,
+  ExternalLink,
+  Link2,
+  Maximize2,
+  MessageSquare,
+  MicOff,
+  MonitorUp,
+  MousePointer2,
+  PictureInPicture2,
+  Pin,
+  PinOff,
+  Users,
+  Video,
+  X,
+} from "lucide-react";
+
+/** Nomes de erro de mídia que valem uma explicação, e não um "erro desconhecido". */
+const MEDIA_ERROR_NAMES = new Set([
+  "NotReadableError",
+  "NotAllowedError",
+  "NotFoundError",
+  "OverconstrainedError",
+  "NotSupportedError",
+  "AbortError",
+]);
+
+function getErrorName(error: unknown): string | undefined {
+  return error instanceof Error && MEDIA_ERROR_NAMES.has(error.name) ? error.name : undefined;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export interface ConferenceRoomProps {
+  roomId: string;
+  token: string;
+  serverUrl: string;
+  initialAudioEnabled?: boolean;
+  initialVideoEnabled?: boolean;
+  initialAudioDeviceId?: string;
+  initialVideoDeviceId?: string;
+  /** Aprimoramentos do microfone e saída de áudio salvos da última vez. */
+  mediaPrefs?: MediaPrefs;
+  onLeave: () => void;
+  onReconnect: () => void;
+}
+
+/**
+ * A sala é uma folha com um instrumento montado nela: papel pautado em volta,
+ * monitor escuro no meio — é contra um fundo neutro que se avalia imagem.
+ */
+export function ConferenceRoom({
+  roomId,
+  token,
+  serverUrl,
+  initialAudioEnabled = true,
+  initialVideoEnabled = true,
+  initialAudioDeviceId,
+  initialVideoDeviceId,
+  mediaPrefs = DEFAULT_MEDIA_PREFS,
+  onLeave,
+  onReconnect,
+}: ConferenceRoomProps) {
+  const [fatalError, setFatalError] = useState<string | null>(null);
+  // Uma saída pedida pelo usuário não é queda de conexão.
+  const userInitiatedLeave = useRef(false);
+
+  function handleOnError(error: Error) {
+    console.error("LiveKit Room disconnected:", error);
+    if (userInitiatedLeave.current) return;
+    const name = getErrorName(error);
+    setFatalError(
+      name
+        ? `Não foi possível abrir um dispositivo (${name}). Você entrou sem ele — pode tentar de novo em Configurações de mídia.`
+        : "A conexão com a conferência foi interrompida.",
+    );
+  }
+
+  function handleOnDisconnected(reason?: DisconnectReason) {
+    console.info("LiveKit encerrado. Motivo:", reason ?? "desconhecido");
+    if (userInitiatedLeave.current) return;
+    setFatalError("A conexão com a conferência foi interrompida.");
+  }
+
+  const leave = useCallback(() => {
+    userInitiatedLeave.current = true;
+    onLeave();
+  }, [onLeave]);
+
+  return (
+    <div className="flex h-full flex-col">
+      <LiveKitRoom
+        token={token}
+        serverUrl={serverUrl}
+        connect
+        audio={
+          initialAudioEnabled
+            ? {
+                deviceId: initialAudioDeviceId,
+                echoCancellation: mediaPrefs.echoCancellation,
+                noiseSuppression: mediaPrefs.noiseSuppression,
+                autoGainControl: mediaPrefs.autoGainControl,
+              }
+            : false
+        }
+        video={initialVideoEnabled ? { deviceId: initialVideoDeviceId } : false}
+        onError={handleOnError}
+        onConnected={() => setFatalError(null)}
+        onDisconnected={handleOnDisconnected}
+        options={{
+          // Sem adaptiveStream: a assinatura fica sempre na camada mais alta, e
+          // redimensionar a janela não troca a resolução recebida.
+          adaptiveStream: false,
+          dynacast: true,
+          webAudioMix: true,
+          stopLocalTrackOnUnpublish: true,
+          ...(mediaPrefs.audioOutputId ? { audioOutput: { deviceId: mediaPrefs.audioOutputId } } : {}),
+          videoCaptureDefaults: { resolution: VideoPresets.h720.resolution },
+          publishDefaults: {
+            videoEncoding: { maxBitrate: CAMERA_BITRATE, maxFramerate: 30, priority: "high" },
+            // Camadas da câmera em 720p e 360p: com a rede apertada, quem
+            // assiste desce um degrau em vez de ficar sem quadro. Duas camadas
+            // (e não três) mantêm leve o encode ao ligar a câmera.
+            videoSimulcastLayers: [VideoPresets.h360],
+            screenShareEncoding: {
+              maxBitrate: SCREEN_BITRATE["1080p"],
+              maxFramerate: 30,
+              priority: "high",
+            },
+            // Sem `degradationPreference` aqui: o padrão do SDK é
+            // `maintain-framerate` na câmera (sob aperto ela perde nitidez, não
+            // congela) e a tela recebe a sua em `startScreenShare`.
+          },
+        }}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <RoomAudioRenderer />
+        <ConferenceStage
+          roomId={roomId}
+          token={token}
+          onLeave={leave}
+          mediaPrefs={mediaPrefs}
+          initialAudioDeviceId={initialAudioDeviceId}
+          initialVideoDeviceId={initialVideoDeviceId}
+        />
+      </LiveKitRoom>
+
+      {fatalError ? (
+        <div role="alert" className="fixed inset-x-0 bottom-24 z-[60] flex justify-center px-4">
+          <div className="flex w-full max-w-[34rem] flex-wrap items-center justify-between gap-3 border border-alert-line bg-sheet px-4 py-3 shadow-overlay [border-radius:var(--radius-sheet)]">
+            <p className="min-w-0 flex-1 text-[0.875rem] text-alert">{fatalError}</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onReconnect}
+                className="border border-rule-2 bg-sheet px-3 py-1.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:bg-band [border-radius:var(--radius-cell)]"
+              >
+                Reconectar
+              </button>
+              <button
+                type="button"
+                onClick={leave}
+                className="border border-transparent px-3 py-1.5 text-[0.8125rem] text-ink-2 transition-colors hover:text-ink [border-radius:var(--radius-sheet)]"
+              >
+                Início
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type SystemAudioHandle = { track: MediaStreamTrack; close(): void };
+
+function ConferenceStage({
+  roomId,
+  token,
+  onLeave,
+  mediaPrefs,
+  initialAudioDeviceId,
+  initialVideoDeviceId,
+}: {
+  roomId: string;
+  token: string;
+  onLeave: () => void;
+  mediaPrefs: MediaPrefs;
+  initialAudioDeviceId?: string;
+  initialVideoDeviceId?: string;
+}) {
+  const platform = usePlatform();
+  const room = useRoomContext();
+  const {
+    localParticipant,
+    isMicrophoneEnabled: isMicOn,
+    isCameraEnabled: isCamOn,
+    isScreenShareEnabled: isScreenSharing,
+  } = useLocalParticipant();
+  const connectionState = useConnectionState();
+
+  const [settings, setSettings] = useState<MediaSettings>(() => {
+    const prefs = readCapture();
+    return {
+      screenFps: Number(prefs.frameRate),
+      screenResolution: prefs.resolution,
+      screenContentType: "motion",
+      systemAudio: true,
+      echoCancellation: mediaPrefs.echoCancellation,
+      noiseSuppression: mediaPrefs.noiseSuppression,
+      autoGainControl: mediaPrefs.autoGainControl,
+      audioInputId: initialAudioDeviceId,
+      videoInputId: initialVideoDeviceId,
+      audioOutputId: mediaPrefs.audioOutputId || undefined,
+    };
+  });
+  // Espelho síncrono: dois ajustes seguidos não podem partir do mesmo estado velho.
+  const settingsRef = useRef<MediaSettings>(settings);
+  const [capture, setCapture] = useState<CaptureSettings>(readCapture);
+  const [audioPrefs, setAudioPrefs] = useState<SystemAudioPrefs>(readSystemAudio);
+  const [audioCaps, setAudioCaps] = useState<AudioCapabilities | null>(null);
+
+  const [panel, setPanel] = useState<Panel | null>(null);
+  // Qual trilha o painel de estatísticas mede; null segue a que está em foco.
+  const [statsKey, setStatsKey] = useState<string | null>(null);
+
+  // O chat vive aqui, e não no painel: o painel desmonta ao fechar.
+  const chat = useChat();
+  // Histórico guardado no servidor + o que chega ao vivo; apagar vale para todos.
+  const roomChat = useRoomChat({ room, roomId, roomToken: token, live: chat.chatMessages, sendLive: chat.send });
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatSeen, setChatSeen] = useState(0);
+  const chatCount = chat.chatMessages.length;
+  useEffect(() => {
+    if (panel === "chat") setChatSeen(chatCount);
+  }, [panel, chatCount]);
+  const chatUnread = panel === "chat" ? 0 : Math.max(0, chatCount - chatSeen);
+
+  // Mensagem nova com a janela fora de foco: notificação do Windows.
+  const notifiedCount = useRef(chatCount);
+  useEffect(() => {
+    const fresh = chat.chatMessages.slice(notifiedCount.current);
+    notifiedCount.current = chat.chatMessages.length;
+    if (document.hasFocus()) return;
+    for (const msg of fresh) {
+      if (msg.from?.isLocal) continue;
+      window.myscreen.room.notify(`${msg.from?.name || "Participante"} no chat`, msg.message.slice(0, 300));
+    }
+  }, [chat.chatMessages]);
+
+  /* --- Controle remoto ----------------------------------------------------
+     Os dois papéis vivem na mesma sala: quem é controlado (o processo
+     principal decide tudo) e quem controla (só manda eventos). */
+  // O que está no ar (só tela inteira pode ser controlada).
+  const [hostShare, setHostShare] = useState<HostShare | null>(null);
+  const [remoteDisabled, setRemoteDisabled] = useState(false);
+  const [soundboardEnabled, setSoundboardEnabled] = useState(false);
+  useEffect(() => {
+    void window.myscreen.settings.get().then((s) => {
+      setRemoteDisabled(s.remoteControlDisabled);
+      setSoundboardEnabled(s.soundboardEnabled);
+    });
+  }, []);
+  const remoteHost = useRemoteControlHost({
+    room,
+    share: hostShare,
+    disabled: remoteDisabled,
+    myName: localParticipant.name || localParticipant.identity || "você",
+    sendChat: roomChat.send,
+  });
+  const remoteViewer = useRemoteControlViewer(room);
+  const remoteAdmin = useRemoteAdminHost(room);
+  // "Enviar texto" abre pela barra da sala, mas o formulário fica no quadro.
+  const [rcTextOpen, setRcTextOpen] = useState(false);
+  const rcActive = remoteViewer.state.phase === "active";
+  useEffect(() => {
+    if (!rcActive) setRcTextOpen(false);
+  }, [rcActive]);
+
+  /* --- Gravação ------------------------------------------------------------ */
+  const recording = useRecording({
+    room,
+    myName: localParticipant.name || localParticipant.identity || "Alguém",
+    sendChat: roomChat.send,
+  });
+  const [isRecordOpen, setIsRecordOpen] = useState(false);
+
+  /* --- Áudios do servidor (o botão só aparece para quem ligou; o som, todos ouvem) */
+  const soundboard = useSoundboard(room, token);
+
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
+  const [controlError, setControlError] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string[]>([]);
+  const [unstableConnection, setUnstableConnection] = useState(false);
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  const [screenShareError, setScreenShareError] = useState<string | null>(null);
+  const [systemAudioActive, setSystemAudioActive] = useState(false);
+  const [audioPaused, setAudioPaused] = useState(false);
+  const [devices, setDevices] = useState({
+    audioInputs: [] as MediaDeviceInfo[],
+    videoInputs: [] as MediaDeviceInfo[],
+    audioOutputs: [] as MediaDeviceInfo[],
+  });
+
+  useEffect(() => {
+    void platform.audioCapabilities().then(setAudioCaps);
+  }, [platform]);
+
+  const tracks = useTracks(
+    [
+      { source: Track.Source.Camera, withPlaceholder: true },
+      { source: Track.Source.ScreenShare, withPlaceholder: false },
+    ],
+    { onlySubscribed: false },
+  );
+
+  const screenShareRefs = tracks.filter(isTrackReference).filter((t) => t.source === Track.Source.ScreenShare);
+  const cameraTiles = tracks.filter((t) => t.source === Track.Source.Camera);
+  const cameraRefs = cameraTiles.filter(isTrackReference);
+
+  const loadDevices = useCallback(async () => {
+    try {
+      const list = await navigator.mediaDevices.enumerateDevices();
+      setDevices({
+        audioInputs: list.filter((d) => d.kind === "audioinput"),
+        videoInputs: list.filter((d) => d.kind === "videoinput"),
+        audioOutputs: list.filter((d) => d.kind === "audiooutput"),
+      });
+    } catch (error) {
+      console.error("Could not enumerate devices:", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDevices();
+  }, [loadDevices]);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  /* --- Som do PC (módulo nativo) ---------------------------------------- */
+  const systemAudioRef = useRef<SystemAudioHandle | null>(null);
+  const stopSystemAudio = useCallback(() => {
+    const handle = systemAudioRef.current;
+    systemAudioRef.current = null;
+    setSystemAudioActive(false);
+    setAudioPaused(false);
+    if (handle) handle.close();
+    const audio = localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
+    if (audio?.track) void localParticipant.unpublishTrack(audio.track);
+  }, [localParticipant]);
+
+  const endSharing = useCallback(() => {
+    stopSystemAudio();
+    setHostShare(null);
+    window.myscreen.room.setSharing({
+      active: false,
+      kind: null,
+      sourceName: "",
+      displayId: null,
+      trackSid: null,
+      hideSelf: false,
+      hasSystemAudio: false,
+    });
+  }, [stopSystemAudio]);
+
+  // A tela pode parar sem passar pelo botão (janela capturada fechou, barra
+  // flutuante, atalho): o som do PC e a barra param junto.
+  useEffect(() => {
+    const onUnpublished = (pub: LocalTrackPublication) => {
+      if (pub.source === Track.Source.ScreenShare) endSharing();
+    };
+    localParticipant.on(ParticipantEvent.LocalTrackUnpublished, onUnpublished);
+    return () => {
+      localParticipant.off(ParticipantEvent.LocalTrackUnpublished, onUnpublished);
+      endSharing();
+    };
+  }, [localParticipant, endSharing]);
+
+  useEffect(() => {
+    const offError = window.myscreen.audio.onError((message) =>
+      setScreenShareError(`O som do PC falhou e está tentando de novo: ${message}`),
+    );
+    const offPause = window.myscreen.room.onAudioPauseChanged(setAudioPaused);
+    return () => {
+      offError();
+      offPause();
+    };
+  }, []);
+
+  // O token do LiveKit expira; sem trocar o token da engine, o SFU derruba a
+  // sala na renovação seguinte mesmo com tudo saudável.
+  useEffect(() => {
+    const engine = (room as unknown as { engine?: { token: string } }).engine;
+    if (engine) engine.token = token;
+  }, [room, token]);
+
+  useEffect(() => {
+    function onQuality(quality: ConnectionQuality, participant: Participant) {
+      if (participant.isLocal && quality === ConnectionQuality.Poor) setUnstableConnection(true);
+    }
+    function onAudioPlayback(playing: boolean) {
+      setAudioBlocked(!playing);
+    }
+    function onDevices() {
+      void loadDevices();
+    }
+    // Toda trilha de vídeo recebida fica presa na camada mais alta.
+    function pinHighQuality(publication: RemoteTrackPublication) {
+      if (publication.kind === Track.Kind.Video) publication.setVideoQuality(VideoQuality.HIGH);
+    }
+    function onSubscribed(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
+      pinHighQuality(publication);
+      applySavedVolume(track, publication.source, participant);
+    }
+    for (const participant of room.remoteParticipants.values()) {
+      for (const publication of participant.trackPublications.values()) {
+        pinHighQuality(publication);
+      }
+    }
+
+    room
+      .on(RoomEvent.ConnectionQualityChanged, onQuality)
+      .on(RoomEvent.AudioPlaybackStatusChanged, onAudioPlayback)
+      .on(RoomEvent.MediaDevicesChanged, onDevices)
+      .on(RoomEvent.TrackSubscribed, onSubscribed)
+      .on(RoomEvent.TrackPublished, pinHighQuality);
+
+    return () => {
+      room
+        .off(RoomEvent.ConnectionQualityChanged, onQuality)
+        .off(RoomEvent.AudioPlaybackStatusChanged, onAudioPlayback)
+        .off(RoomEvent.MediaDevicesChanged, onDevices)
+        .off(RoomEvent.TrackSubscribed, onSubscribed)
+        .off(RoomEvent.TrackPublished, pinHighQuality);
+    };
+  }, [room, loadDevices]);
+
+  const toggleMic = useCallback(async () => {
+    const current = settingsRef.current;
+    const next = !localParticipant.isMicrophoneEnabled;
+    try {
+      await localParticipant.setMicrophoneEnabled(next, {
+        deviceId: current.audioInputId,
+        echoCancellation: current.echoCancellation,
+        noiseSuppression: current.noiseSuppression,
+        autoGainControl: current.autoGainControl,
+      });
+      writeMediaPrefs({ audioEnabled: next });
+    } catch (error) {
+      console.error("Erro ao alternar microfone:", error);
+      throw new Error(mediaFailure(error, "microfone"));
+    }
+  }, [localParticipant]);
+
+  const toggleCam = useCallback(async () => {
+    const next = !localParticipant.isCameraEnabled;
+    try {
+      await localParticipant.setCameraEnabled(next, {
+        deviceId: settingsRef.current.videoInputId,
+      });
+      writeMediaPrefs({ videoEnabled: next });
+    } catch (error) {
+      console.error("Erro ao alternar câmera:", error);
+      throw new Error(mediaFailure(error, "câmera"));
+    }
+  }, [localParticipant]);
+
+  const stopScreenShare = useCallback(async () => {
+    endSharing();
+    try {
+      await localParticipant.setScreenShareEnabled(false);
+    } catch (error) {
+      console.error("Erro ao parar a tela:", error);
+    }
+  }, [localParticipant, endSharing]);
+
+  /**
+   * Compartilha a fonte escolhida no seletor do app. O vídeo sai do
+   * `getDisplayMedia` (que o processo principal resolve para a fonte
+   * escolhida); o som do PC sai do módulo nativo, publicado à parte como
+   * ScreenShareAudio. Sem nativo, o plano B é o loopback do Chromium.
+   */
+  const startScreenShare = useCallback(
+    async (next: CaptureSettings, source: CaptureSource, nextAudio: SystemAudioPrefs) => {
+      writeCapture(next);
+      writeSystemAudio(nextAudio);
+      setCapture(next);
+      setAudioPrefs(nextAudio);
+      const merged: MediaSettings = {
+        ...settingsRef.current,
+        screenFps: Number(next.frameRate),
+        screenResolution: next.resolution,
+        screenContentType: "motion",
+        systemAudio: true,
+      };
+      settingsRef.current = merged;
+      setSettings(merged);
+
+      // Trocar de fonte com a tela no ar: para a anterior primeiro.
+      if (localParticipant.isScreenShareEnabled) await stopScreenShare();
+
+      const native = audioCaps?.native === true;
+      // O som vai sempre completo: o sistema inteiro, menos o MyScreen.
+      const loopback = !native;
+
+      const { width, height } = RESOLUTION[merged.screenResolution];
+      const contentHint = merged.screenContentType === "detail" ? "detail" : "motion";
+      const codec = chooseScreenCodec("auto", await probeEncoders(width, height, merged.screenFps));
+      const publishOptions: TrackPublishOptions = {
+        screenShareEncoding: {
+          maxBitrate: screenBitrate(merged.screenResolution, merged.screenFps),
+          maxFramerate: merged.screenFps,
+          priority: "high",
+        },
+        videoCodec: codec.codec,
+        // AV1/VP9: uma camada espacial (a tela inteira, sempre) e três
+        // temporais, para o SFU baixar a taxa de quem tem rede fraca sem
+        // tirar a nitidez. Quem não decodifica recebe o codec reserva.
+        ...(isSvcCodec(codec.codec)
+          ? { scalabilityMode: "L1T3" as const, backupCodec: { codec: codec.backup ?? "vp8" } }
+          : { backupCodec: false }),
+        // Uma camada só: quem assiste recebe sempre a tela inteira.
+        simulcast: false,
+        // Texto precisa de nitidez (cai a taxa); vídeo e jogo, de fluidez.
+        degradationPreference: merged.screenContentType === "detail" ? "maintain-resolution" : "maintain-framerate",
+      };
+      const captureOptions = (withAudio: boolean): ScreenShareCaptureOptions => ({
+        // Som do sistema CRU: sem AEC, supressão ou AGC, que apagariam música e jogo.
+        audio: withAudio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false,
+        systemAudio: withAudio ? "include" : "exclude",
+        suppressLocalAudioPlayback: false,
+        contentHint,
+        resolution: { width, height, frameRate: merged.screenFps },
+      });
+
+      try {
+        await platform.selectCaptureSource(source.id, { loopbackAudio: loopback });
+        await localParticipant.setScreenShareEnabled(true, captureOptions(loopback), publishOptions);
+        setScreenShareError(null);
+      } catch (error) {
+        const name = getErrorName(error) ?? (error instanceof Error ? error.name : "Erro");
+        const message = getErrorMessage(error);
+        console.error("Erro ao compartilhar tela:", error);
+        if (name === "AbortError" || (name === "NotAllowedError" && !/system/i.test(message))) return;
+        // O plano B do som falhou: a tela ainda pode ir sem ele.
+        if (loopback) {
+          try {
+            await platform.selectCaptureSource(source.id, { loopbackAudio: false });
+            await localParticipant.setScreenShareEnabled(true, captureOptions(false), publishOptions);
+            setScreenShareError(`O som do PC não pôde ser capturado (${name}). A tela está indo só com vídeo.`);
+          } catch (fallbackError) {
+            setScreenShareError(`Não foi possível compartilhar a tela: ${getErrorMessage(fallbackError)}`);
+            return;
+          }
+        } else {
+          setScreenShareError(`Não foi possível compartilhar a tela (${name}): ${message}`);
+          return;
+        }
+      }
+
+      const trackSid = localParticipant.getTrackPublication(Track.Source.ScreenShare)?.trackSid ?? null;
+      window.myscreen.room.setSharing({
+        active: true,
+        kind: source.kind,
+        sourceName: source.name,
+        displayId: source.displayId,
+        trackSid,
+        hideSelf: next.hideSelf,
+        hasSystemAudio: false,
+      });
+      setHostShare({ kind: source.kind, display: source.detail ? source.detail.replace(/\s*×\s*/, "x") : null });
+
+      if (native) {
+        const mode: SystemAudioMode = { kind: "system-except-self", alsoExcludeDiscord: nextAudio.excludeDiscord };
+        try {
+          const handle = await platform.openSystemAudio(
+            mode,
+            { normalize: nextAudio.normalize, gainPct: nextAudio.gainPct },
+            (lostMessage) => {
+              systemAudioRef.current = null;
+              setSystemAudioActive(false);
+              const pub = localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
+              if (pub?.track) void localParticipant.unpublishTrack(pub.track);
+              setScreenShareError(lostMessage);
+            },
+          );
+          systemAudioRef.current = handle;
+          await localParticipant.publishTrack(handle.track, {
+            source: Track.Source.ScreenShareAudio,
+            name: "screen_share_audio",
+            audioPreset: AudioPresets.musicHighQualityStereo,
+            forceStereo: true,
+            dtx: false,
+            red: false,
+          });
+          setSystemAudioActive(true);
+          window.myscreen.room.setSharing({
+            active: true,
+            kind: source.kind,
+            sourceName: source.name,
+            displayId: source.displayId,
+            trackSid,
+            hideSelf: next.hideSelf,
+            hasSystemAudio: true,
+          });
+        } catch (error) {
+          console.error("Erro ao abrir o som do PC:", error);
+          stopSystemAudio();
+          setScreenShareError(
+            `Não foi possível abrir o som do PC (${getErrorMessage(error)}). A tela está no ar sem ele.`,
+          );
+        }
+      } else if (loopback) {
+        if (localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)) {
+          setScreenShareError(
+            "O som do PC está indo pelo captador do Chromium, que também pega a voz da chamada. Use fone de ouvido para não fazer eco.",
+          );
+        }
+      }
+    },
+    [platform, localParticipant, audioCaps, stopScreenShare, stopSystemAudio],
+  );
+
+  const resumeAudioPlayback = useCallback(async () => {
+    try {
+      await room.startAudio();
+      setAudioBlocked(false);
+    } catch (error) {
+      console.error("Não foi possível retomar o áudio:", error);
+    }
+  }, [room]);
+
+  /**
+   * Aplica um patch nos ajustes de mídia, ou não aplica nada: cada grupo volta
+   * atrás sozinho se o Chromium recusar.
+   */
+  const applyMediaSettings = useCallback(
+    async (patch: Partial<MediaSettings>) => {
+      const previous = settingsRef.current;
+      const next = { ...previous, ...patch };
+      const rollback = () => {
+        settingsRef.current = previous;
+        setSettings(previous);
+      };
+
+      const touchesProcessors =
+        patch.echoCancellation !== undefined ||
+        patch.noiseSuppression !== undefined ||
+        patch.autoGainControl !== undefined;
+
+      // `applyConstraints` e NÃO `restartTrack`, que perde o `deviceId`.
+      if (touchesProcessors) {
+        const track = localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+        if (track instanceof LocalAudioTrack) {
+          try {
+            await track.applyConstraints({
+              echoCancellation: next.echoCancellation,
+              noiseSuppression: next.noiseSuppression,
+              autoGainControl: next.autoGainControl,
+            });
+          } catch (error) {
+            console.error("Erro ao aplicar aprimoramentos de microfone:", error);
+            rollback();
+            return;
+          }
+        }
+      }
+
+      if (patch.audioInputId !== undefined || "audioInputId" in patch) {
+        try {
+          const switched = await room.switchActiveDevice("audioinput", patch.audioInputId ?? "default");
+          if (!switched) throw new Error("O microfone selecionado foi recusado.");
+        } catch (error) {
+          console.error("Erro ao trocar o microfone:", error);
+          rollback();
+          return;
+        }
+      }
+      if (patch.videoInputId !== undefined || "videoInputId" in patch) {
+        try {
+          const switched = await room.switchActiveDevice("videoinput", patch.videoInputId ?? "default");
+          if (!switched) throw new Error("A câmera selecionada foi recusada.");
+        } catch (error) {
+          console.error("Erro ao trocar a câmera:", error);
+          rollback();
+          return;
+        }
+      }
+      if (patch.audioOutputId !== undefined || "audioOutputId" in patch) {
+        if (supportsAudioOutputSelection() || "setSinkId" in AudioContext.prototype) {
+          try {
+            await room.switchActiveDevice("audiooutput", patch.audioOutputId ?? "default");
+          } catch (error) {
+            console.error("Erro ao trocar a saída de áudio:", error);
+            rollback();
+            return;
+          }
+        }
+      }
+
+      settingsRef.current = next;
+      setSettings(next);
+      writeMediaPrefs({
+        echoCancellation: next.echoCancellation,
+        noiseSuppression: next.noiseSuppression,
+        autoGainControl: next.autoGainControl,
+        audioInputId: next.audioInputId ?? "",
+        videoInputId: next.videoInputId ?? "",
+        audioOutputId: next.audioOutputId ?? "",
+      });
+    },
+    [localParticipant, room],
+  );
+
+  const handleLeave = useCallback(() => {
+    endSharing();
+    void room.disconnect();
+    onLeave();
+  }, [room, onLeave, endSharing]);
+
+  /* --- Tela cheia --------------------------------------------------------- */
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [fullscreenEl, setFullscreenEl] = useState<Element | null>(null);
+  const [canFullscreen, setCanFullscreen] = useState(false);
+
+  useEffect(() => {
+    setCanFullscreen(Boolean(document.fullscreenEnabled));
+    const onChange = () => setFullscreenEl(document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback((element: Element | null) => {
+    if (!element) return;
+    if (document.fullscreenElement === element) {
+      void document.exitFullscreen();
+      return;
+    }
+    void element.requestFullscreen().catch((error: unknown) => {
+      console.error("Tela cheia recusada:", error);
+    });
+  }, []);
+
+  /** Um erro de microfone/câmera vira aviso na régua, nunca promessa rejeitada solta. */
+  const guard = useCallback(
+    (action: () => Promise<void>) => () => {
+      action().catch((error: unknown) => setControlError(getErrorMessage(error)));
+    },
+    [],
+  );
+
+  /* --- Integração com o Windows -------------------------------------------
+     A bandeja, os botões da miniatura e os atalhos globais seguem o estado
+     da sala; o que eles pedem chega aqui. */
+  useEffect(() => {
+    window.myscreen.room.setState({ inRoom: true, micOn: isMicOn, camOn: isCamOn, sharing: isScreenSharing });
+  }, [isMicOn, isCamOn, isScreenSharing]);
+  useEffect(
+    () => () => window.myscreen.room.setState({ inRoom: false, micOn: false, camOn: false, sharing: false }),
+    [],
+  );
+
+  const actionsRef = useRef({ toggleMic, toggleCam, stopScreenShare, handleLeave, guard });
+  actionsRef.current = { toggleMic, toggleCam, stopScreenShare, handleLeave, guard };
+  useEffect(() => {
+    const offShortcut = window.myscreen.room.onShortcut((action) => {
+      const a = actionsRef.current;
+      if (action === "mic") a.guard(a.toggleMic)();
+      else if (action === "cam") a.guard(a.toggleCam)();
+      else if (action === "stop-share") void a.stopScreenShare();
+    });
+    const offLeave = window.myscreen.room.onLeaveRequest(() => actionsRef.current.handleLeave());
+    const offStop = window.myscreen.room.onStopShareRequest(() => void actionsRef.current.stopScreenShare());
+    return () => {
+      offShortcut();
+      offLeave();
+      offStop();
+    };
+  }, []);
+
+  /* --- Composição do palco ----------------------------------------------- */
+  const allTiles: TrackReferenceOrPlaceholder[] = [...screenShareRefs, ...cameraTiles];
+  const pinnedTiles = pinned
+    .map((key) => allTiles.find((t) => tileKey(t) === key))
+    .filter((t): t is TrackReferenceOrPlaceholder => t !== undefined);
+  const focusTiles = pinnedTiles.length > 0 ? pinnedTiles : screenShareRefs[0] ? [screenShareRefs[0]] : [];
+  const focusKeys = focusTiles.map(tileKey);
+  const focus = focusTiles[0];
+  const strip = focus ? allTiles.filter((t) => !focusKeys.includes(tileKey(t))) : [];
+
+  const togglePin = useCallback((key: string) => {
+    setPinned((current) => (current.includes(key) ? current.filter((k) => k !== key) : [key]));
+  }, []);
+
+  const focusKeysJoined = focusKeys.join("|");
+  const addSideBySide = useCallback(
+    (key: string) => {
+      const base = focusKeysJoined ? focusKeysJoined.split("|") : [];
+      setPinned(base.includes(key) ? base : [...base, key]);
+    },
+    [focusKeysJoined],
+  );
+
+  /* --- Janelas separadas e flutuantes -------------------------------------
+     `window.open("")` vira uma BrowserWindow com moldura nativa (o processo
+     principal acrescenta "Sempre no topo" e "Mover para o monitor" no botão
+     direito). A flutuante é a mesma coisa sem moldura e sempre no topo: uma
+     por quadro, quantas a pessoa quiser. O vídeo usa a MESMA trilha já
+     recebida, sem nova assinatura, e não depende do <video> do quadro: o
+     quadro pode trocar de lugar (grade, destaque, faixa) sem a janela apagar —
+     era isso que deixava preto o PiP do Chromium. */
+  const popouts = useRef(new Map<string, Popout>());
+  const tilesRef = useRef(allTiles);
+  tilesRef.current = allTiles;
+
+  /** Reata a janela à trilha atual; se a trilha recebida morreu, assina de novo. */
+  const reloadPopout = useCallback((key: string) => {
+    const popout = popouts.current.get(key);
+    if (!popout || popout.win.closed) return;
+    const publication = tilesRef.current.find((t) => tileKey(t) === popout.tileKey)?.publication;
+    const track = publication?.track?.mediaStreamTrack;
+    if (track) {
+      popout.track = track;
+      popout.video.srcObject = new MediaStream([track]);
+      void popout.video.play().catch(() => {});
+    }
+    if (publication instanceof RemoteTrackPublication && (!track || track.readyState === "ended")) {
+      publication.setSubscribed(false);
+      setTimeout(() => publication.setSubscribed(true), 300);
+    }
+  }, []);
+
+  const openPopout = useCallback(
+    (trackRef: TrackReferenceOrPlaceholder, label: string, floating = false) => {
+      const tKey = tileKey(trackRef);
+      const key = floating ? `float:${tKey}` : tKey;
+      const existing = popouts.current.get(key);
+      if (existing && !existing.win.closed) {
+        existing.win.focus();
+        return;
+      }
+      const track = trackRef.publication?.track?.mediaStreamTrack;
+      if (!track) {
+        setControlError("Este quadro ainda não tem vídeo para abrir em outra janela.");
+        return;
+      }
+      const isScreen = trackRef.source === Track.Source.ScreenShare;
+      const size = floating
+        ? isScreen
+          ? "width=560,height=315"
+          : "width=400,height=225"
+        : isScreen
+          ? "width=1280,height=720"
+          : "width=640,height=360";
+      const win = window.open(
+        "",
+        `${floating ? FLOAT_WINDOW_PREFIX : "myscreen-"}${tKey.replace(/[^a-z0-9]/gi, "-")}`,
+        `popup,${size}`,
+      );
+      if (!win) {
+        setControlError("Não foi possível abrir a nova janela.");
+        return;
+      }
+      const video = mountPopout(win, label, trackRef.participant.isLocal && !isScreen, {
+        floating,
+        onReload: () => reloadPopout(key),
+      });
+      video.srcObject = new MediaStream([track]);
+      popouts.current.set(key, { win, video, track, tileKey: tKey });
+    },
+    [reloadPopout],
+  );
+
+  useEffect(() => {
+    for (const [key, popout] of popouts.current) {
+      const tile = allTiles.find((t) => tileKey(t) === popout.tileKey);
+      const track = tile?.publication?.track?.mediaStreamTrack;
+      if (popout.win.closed || !tile) {
+        if (!popout.win.closed) popout.win.close();
+        popouts.current.delete(key);
+      } else if (track && track !== popout.track) {
+        popout.video.srcObject = new MediaStream([track]);
+        popout.track = track;
+      }
+    }
+  });
+
+  useEffect(() => {
+    const map = popouts.current;
+    const closeAll = () => {
+      for (const { win } of map.values()) if (!win.closed) win.close();
+      map.clear();
+    };
+    window.addEventListener("pagehide", closeAll);
+    return () => {
+      window.removeEventListener("pagehide", closeAll);
+      closeAll();
+    };
+  }, []);
+
+  const participants = useParticipants();
+  const participantCount = participants.length;
+
+  // Cada câmera e cada tela publicada na sala, de qualquer pessoa.
+  const recordOptions: RecordOption[] = participants.flatMap((p) => {
+    const person = p.name || p.identity || (p.isLocal ? "Você" : "Participante");
+    const out: RecordOption[] = [];
+    const cam = p.getTrackPublication(Track.Source.Camera);
+    if (cam) {
+      out.push({
+        identity: p.identity,
+        source: Track.Source.Camera,
+        label: `Câmera de ${person}`,
+        person,
+        isLocal: p.isLocal,
+        live: !cam.isMuted && Boolean(cam.track),
+      });
+    }
+    const screen = p.getTrackPublication(Track.Source.ScreenShare);
+    if (screen) {
+      out.push({
+        identity: p.identity,
+        source: Track.Source.ScreenShare,
+        label: `Tela de ${person}`,
+        person,
+        isLocal: p.isLocal,
+        live: !screen.isMuted && Boolean(screen.track),
+      });
+    }
+    return out;
+  });
+  const roomLabel = room.name || roomId;
+
+  const reconnecting =
+    connectionState === ConnectionState.Reconnecting || connectionState === ConnectionState.SignalReconnecting;
+
+  // Só trilhas com mídia de verdade: câmera desligada não tem o que medir.
+  const statsOptions = [...screenShareRefs, ...cameraRefs].filter((t) => t.publication?.track);
+  const statsTrack =
+    statsOptions.find((t) => tileKey(t) === statsKey) ??
+    (focus && isTrackReference(focus) ? focus : undefined) ??
+    screenShareRefs[0] ??
+    cameraRefs[0];
+
+  const notices = [
+    screenShareError ? { key: "screen", text: screenShareError, dismiss: () => setScreenShareError(null) } : null,
+    controlError ? { key: "control", text: controlError, dismiss: () => setControlError(null) } : null,
+    recording.error ? { key: "record", text: recording.error, dismiss: recording.dismissError } : null,
+    remoteViewer.notice ? { key: "remote", text: remoteViewer.notice, dismiss: remoteViewer.dismissNotice } : null,
+    remoteViewer.state.phase === "requesting"
+      ? {
+          key: "remote-wait",
+          text: `Aguardando ${remoteViewer.state.targetName} permitir o controle…`,
+          dismiss: remoteViewer.cancel,
+        }
+      : null,
+    unstableConnection
+      ? {
+          key: "net",
+          text: "Conexão instável: a qualidade da sua rede caiu.",
+          dismiss: () => setUnstableConnection(false),
+        }
+      : null,
+  ].filter((n): n is { key: string; text: string; dismiss: () => void } => n !== null);
+
+  const closeShareDialog = useCallback(() => setIsShareDialogOpen(false), []);
+  const closeRecordDialog = useCallback(() => setIsRecordOpen(false), []);
+
+  const updateAudioPrefs = useCallback((patch: Partial<SystemAudioPrefs>) => {
+    setAudioPrefs((prev) => {
+      const next = { ...prev, ...patch };
+      writeSystemAudio(next);
+      return next;
+    });
+    window.myscreen.audio.update({ normalize: patch.normalize, gainPct: patch.gainPct });
+  }, []);
+
+  const tileProps = {
+    pinnedKeys: pinned,
+    canSideBySide: focus !== undefined,
+    onSideBySide: addSideBySide,
+    onPopout: openPopout,
+    fullscreenEl,
+    onTogglePin: togglePin,
+    onToggleFullscreen: toggleFullscreen,
+    remote: remoteViewer,
+    rcTextOpen,
+    setRcTextOpen,
+  };
+
+  return (
+    <div ref={shellRef} className="fixed inset-0 z-50 flex flex-col overscroll-none bg-paper text-ink">
+      {/* --- Barra superior (área de arrastar da janela) ----------------- */}
+      <header className="app-drag titlebar-pad flex h-12 shrink-0 items-center justify-between gap-3 border-b border-rule bg-sheet pl-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <LogoMark live={isScreenSharing} className="size-[22px]" />
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-[0.875rem] font-medium tracking-[-0.01em] text-ink">{roomLabel}</span>
+            <span
+              aria-hidden
+              title={reconnecting ? "Reconectando" : "Conectado"}
+              className={cn("size-1.5 shrink-0 rounded-full", reconnecting ? "animate-pulse bg-warn-dot" : "bg-ok")}
+            />
+          </span>
+          {isScreenSharing ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-live-wash px-2 py-0.5 text-[0.6875rem] font-semibold tracking-[0.04em] text-live shadow-[inset_0_0_0_1px_var(--color-live-line)]">
+              <span aria-hidden data-on="true" className="live-dot !size-1.5" />
+              NO AR
+            </span>
+          ) : null}
+          {reconnecting ? (
+            <span className="text-[0.75rem] text-warn">
+              {connectionState === ConnectionState.SignalReconnecting
+                ? "Reconectando a sinalização..."
+                : "Reconectando..."}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1">
+          {remoteHost.session ? (
+            <ControlledPill
+              name={remoteHost.session.name}
+              paused={remoteHost.session.paused}
+              elevated={remoteHost.session.elevated}
+              elevating={remoteHost.elevating}
+              onElevate={remoteHost.elevate}
+              admin={remoteAdmin}
+              onPause={() => remoteHost.pause(!remoteHost.session?.paused)}
+              onStop={remoteHost.stop}
+            />
+          ) : null}
+          {recording.recordings.length > 0 ? (
+            <RecordingPill
+              count={recording.recordings.length}
+              since={Math.min(...recording.recordings.map((r) => r.startedAt))}
+              onClick={() => setIsRecordOpen(true)}
+            />
+          ) : null}
+          {remoteViewer.state.phase === "active" ? (
+            <ControllingPill
+              state={remoteViewer.state}
+              textOpen={rcTextOpen}
+              onToggleText={() => setRcTextOpen((v) => !v)}
+              onFullscreen={() => toggleFullscreen(document.querySelector("[data-rc-controlled]"))}
+              onStop={remoteViewer.stop}
+              onAdmin={remoteViewer.state.adminStatus === "enabled" ? remoteViewer.stopAdmin : remoteViewer.requestAdmin}
+            />
+          ) : null}
+          <CopyLinkButton url={platform.inviteUrl(roomId)} />
+          <span aria-hidden className="mx-1 h-4 w-px bg-rule-2" />
+          <BarToggle
+            label="Pessoas"
+            open={panel === "people"}
+            onClick={() => setPanel((p) => (p === "people" ? null : "people"))}
+            badge={participantCount}
+          >
+            <Users size={17} strokeWidth={1.75} aria-hidden />
+          </BarToggle>
+          <BarToggle
+            label="Chat"
+            open={panel === "chat"}
+            onClick={() => setPanel((p) => (p === "chat" ? null : "chat"))}
+            badge={chatUnread > 0 ? chatUnread : undefined}
+            badgeTone="signal"
+          >
+            <MessageSquare size={17} strokeWidth={1.75} aria-hidden />
+          </BarToggle>
+          <BarToggle
+            label="Estatísticas"
+            open={panel === "stats"}
+            onClick={() => setPanel((p) => (p === "stats" ? null : "stats"))}
+          >
+            <Activity size={17} strokeWidth={1.75} aria-hidden />
+          </BarToggle>
+          <span aria-hidden className="mx-1 h-4 w-px bg-rule-2" />
+          <ThemeToggle />
+        </div>
+      </header>
+
+      {/* --- Avisos ------------------------------------------------------ */}
+      {notices.length > 0 || audioBlocked ? (
+        <div className="shrink-0 border-b border-rule bg-band">
+          {notices.map((n) => (
+            <Notice key={n.key} text={n.text} onDismiss={n.dismiss} />
+          ))}
+          {audioBlocked ? (
+            <Notice
+              text="A reprodução de áudio foi bloqueada."
+              onDismiss={() => setAudioBlocked(false)}
+              action={
+                <button
+                  type="button"
+                  onClick={resumeAudioPlayback}
+                  className="border border-rule-2 bg-sheet px-2.5 py-1 text-[0.75rem] font-semibold text-ink transition-colors hover:border-rule-3 [border-radius:var(--radius-cell)]"
+                >
+                  Retomar áudio
+                </button>
+              }
+            />
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* --- Palco + painel --------------------------------------------- */}
+      <div className="relative flex min-h-0 flex-1">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-4">
+          {focusTiles.length > 1 ? (
+            <SplitStage tiles={focusTiles} tileProps={tileProps} onExit={() => setPinned([])} />
+          ) : focus ? (
+            <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
+              <div className="flex min-h-0 min-w-0 flex-1">
+                <Tile trackRef={focus} variant="stage" {...tileProps} />
+              </div>
+              {strip.length > 0 ? (
+                <div className="flex h-[9rem] shrink-0 gap-3 overflow-x-auto lg:h-auto lg:w-[15rem] lg:flex-col lg:overflow-x-visible lg:overflow-y-auto xl:w-[17rem]">
+                  {strip.map((t) => (
+                    <div key={tileKey(t)} className="aspect-video h-full shrink-0 lg:h-auto lg:w-full">
+                      <Tile trackRef={t} variant="strip" {...tileProps} />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : cameraTiles.length > 0 ? (
+            <CameraGrid tiles={cameraTiles} tileProps={tileProps} />
+          ) : (
+            <EmptyStage onShare={() => setIsShareDialogOpen(true)} />
+          )}
+        </main>
+
+        {panel ? (
+          <div className="flex min-h-0 w-[22rem] shrink-0 flex-col border-l border-rule bg-sheet">
+            {panel === "chat" ? (
+              <ChatSidebar
+                isOpen
+                onClose={() => setPanel(null)}
+                chatMessages={roomChat.entries}
+                send={roomChat.send}
+                onDelete={roomChat.remove}
+                loadFile={roomChat.loadFile}
+                isSending={chat.isSending}
+                draft={chatDraft}
+                onDraftChange={setChatDraft}
+              />
+            ) : panel === "people" ? (
+              <ParticipantsList isOpen onClose={() => setPanel(null)} />
+            ) : (
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <StatsPicker
+                  options={statsOptions}
+                  selected={statsTrack ? tileKey(statsTrack) : null}
+                  onSelect={setStatsKey}
+                />
+                <TrackStatsDropdown
+                  key={statsTrack ? tileKey(statsTrack) : "none"}
+                  trackRef={statsTrack}
+                  open
+                  onClose={() => setPanel(null)}
+                />
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+
+      {/* --- Doca ------------------------------------------------------- */}
+      <footer className="relative shrink-0 border-t border-rule bg-sheet px-3 pt-3 pb-3">
+        <MediaControls
+          isMicOn={isMicOn}
+          isCamOn={isCamOn}
+          isScreenSharing={isScreenSharing}
+          isFullscreen={fullscreenEl === shellRef.current && fullscreenEl !== null}
+          canFullscreen={canFullscreen}
+          onToggleMic={guard(toggleMic)}
+          onToggleCam={guard(toggleCam)}
+          onToggleScreenShare={() => (isScreenSharing ? void stopScreenShare() : setIsShareDialogOpen(true))}
+          recordingCount={recording.recordings.length}
+          onRecord={() => setIsRecordOpen(true)}
+          onToggleFullscreen={() => toggleFullscreen(shellRef.current)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onLeave={handleLeave}
+          extra={
+            <>
+              {soundboardEnabled ? <SoundboardControl board={soundboard} /> : null}
+              {systemAudioActive ? (
+                <SystemAudioControl
+                  prefs={audioPrefs}
+                  paused={audioPaused}
+                  onChange={updateAudioPrefs}
+                  onPausedChange={(p) => {
+                    setAudioPaused(p);
+                    window.myscreen.audio.update({ paused: p });
+                  }}
+                />
+              ) : null}
+            </>
+          }
+        />
+      </footer>
+
+      <SettingsModal
+        open={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        settings={settings}
+        onApply={applyMediaSettings}
+        devices={devices}
+      />
+
+      {remoteHost.consent ? (
+        <ConsentDialog key={remoteHost.consent.reqId} request={remoteHost.consent} onDecide={remoteHost.decide} />
+      ) : null}
+
+      <RecordDialog
+        open={isRecordOpen}
+        options={recordOptions}
+        recordings={recording.recordings}
+        lastFile={recording.lastFile}
+        onClose={closeRecordDialog}
+        onStart={(targets, audio) => {
+          recording.start(targets, audio);
+          setIsRecordOpen(false);
+        }}
+        onStop={(key) => void recording.stop(key)}
+        onStopAll={() => void recording.stopAll()}
+        onReveal={(file) => window.myscreen.recording.reveal(file)}
+      />
+
+      <ShareDialog
+        open={isShareDialogOpen}
+        initial={capture}
+        audioPrefs={audioPrefs}
+        capabilities={audioCaps}
+        onClose={closeShareDialog}
+        onConfirm={(next, source, nextAudio) => {
+          setIsShareDialogOpen(false);
+          void startScreenShare(next, source, nextAudio);
+        }}
+      />
+    </div>
+  );
+}
+
+/** Mensagem específica para cada falha de dispositivo no Windows. */
+function mediaFailure(error: unknown, what: "microfone" | "câmera"): string {
+  const name = error instanceof Error ? error.name : "";
+  if (name === "NotReadableError") return `A ${what === "câmera" ? "câmera" : "placa de som"} está em uso por outro aplicativo.`;
+  if (name === "NotAllowedError")
+    return `O Windows bloqueou o ${what === "câmera" ? "acesso à câmera" : "microfone"}. Libere em Configurações → Privacidade.`;
+  if (name === "NotFoundError") return what === "câmera" ? "Nenhuma câmera encontrada." : "Nenhum microfone encontrado.";
+  return `Não foi possível usar ${what === "câmera" ? "a câmera" : "o microfone"} selecionado.`;
+}
+
+type Panel = "chat" | "people" | "stats";
+
+type Popout = { win: Window; video: HTMLVideoElement; track: MediaStreamTrack; tileKey: string };
+
+/** O processo principal reconhece a janela flutuante por este começo do nome. */
+const FLOAT_WINDOW_PREFIX = "myscreen-float-";
+
+/**
+ * Monta a página da janela separada: só o vídeo, em fundo preto. Duplo clique
+ * alterna a tela cheia, e o cursor some depois de um tempo parado.
+ *
+ * A flutuante não tem moldura: uma barra sobre o vídeo (por onde se arrasta)
+ * traz o nome, recarregar e fechar. Ela some com o mouse parado; a faixa de
+ * arrastar continua lá mesmo invisível. F5 também recarrega.
+ */
+function mountPopout(
+  win: Window,
+  title: string,
+  mirror: boolean,
+  { floating, onReload }: { floating: boolean; onReload: () => void },
+): HTMLVideoElement {
+  const doc = win.document;
+  doc.title = `${title} · MyScreen`;
+  doc.body.replaceChildren();
+  doc.body.style.cssText =
+    "margin:0;background:#000;overflow:hidden;height:100vh;font:500 12px/1 'Segoe UI',system-ui,sans-serif";
+
+  const video = doc.createElement("video");
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.style.cssText = `display:block;width:100vw;height:100vh;object-fit:contain${
+    mirror ? ";transform:scaleX(-1)" : ""
+  }`;
+  doc.body.append(video);
+
+  video.addEventListener("dblclick", () => {
+    if (doc.fullscreenElement) void doc.exitFullscreen();
+    else void doc.documentElement.requestFullscreen().catch(() => {});
+  });
+
+  let bar: HTMLDivElement | null = null;
+  if (floating) {
+    const style = doc.createElement("style");
+    style.textContent = `
+      .bar{position:fixed;inset:0 0 auto 0;height:32px;display:flex;align-items:center;gap:2px;
+        padding:0 4px 0 10px;color:#fff;background:linear-gradient(rgba(0,0,0,.7),rgba(0,0,0,0));
+        -webkit-app-region:drag;user-select:none;transition:opacity .2s}
+      .bar.idle{opacity:0}
+      .bar span{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-shadow:0 1px 2px #000}
+      .bar button{all:unset;-webkit-app-region:no-drag;display:flex;align-items:center;justify-content:center;
+        width:28px;height:26px;border-radius:5px;color:#fff}
+      .bar button:hover{background:rgba(255,255,255,.18)}
+      .bar button:focus-visible{outline:2px solid #fff}
+      .bar button.close:hover{background:#c42b1c}
+      .bar svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+    `;
+    doc.head.append(style);
+    bar = doc.createElement("div");
+    bar.className = "bar";
+    const name = doc.createElement("span");
+    name.textContent = title;
+    const button = (label: string, icon: string, onClick: () => void, className = "") => {
+      const b = doc.createElement("button");
+      b.type = "button";
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      if (className) b.className = className;
+      b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg>`;
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    bar.append(
+      name,
+      button("Recarregar (F5)", '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>', onReload),
+      button("Fechar", '<path d="M18 6 6 18M6 6l12 12"/>', () => win.close(), "close"),
+    );
+    doc.body.append(bar);
+    doc.addEventListener("keydown", (event) => {
+      if (event.key === "F5" || (event.ctrlKey && event.key.toLowerCase() === "r")) {
+        event.preventDefault();
+        onReload();
+      }
+    });
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const wake = () => {
+    doc.body.style.cursor = "";
+    bar?.classList.remove("idle");
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      doc.body.style.cursor = "none";
+      bar?.classList.add("idle");
+    }, FULLSCREEN_IDLE_MS);
+  };
+  doc.addEventListener("pointermove", wake);
+  win.addEventListener("focus", wake);
+  wake();
+
+  return video;
+}
+
+function tileKey(t: TrackReferenceOrPlaceholder): string {
+  return `${t.participant.identity}:${t.source}`;
+}
+
+/** O nome que o quadro mostra: "Sua tela", "Tela de Ana", "Ana (você)". */
+function trackLabel(t: TrackReferenceOrPlaceholder): string {
+  const { participant } = t;
+  const name = participant.name || participant.identity || (participant.isLocal ? "Você" : "Participante");
+  if (t.source === Track.Source.ScreenShare) return participant.isLocal ? "Sua tela" : `Tela de ${name}`;
+  return participant.isLocal && name !== "Você" ? `${name} (você)` : name;
+}
+
+/**
+ * Escolhe de qual trilha o painel mostra as estatísticas: cada câmera e cada
+ * tela da sala é um botão.
+ */
+function StatsPicker({
+  options,
+  selected,
+  onSelect,
+}: {
+  options: TrackReferenceOrPlaceholder[];
+  selected: string | null;
+  onSelect: (key: string) => void;
+}) {
+  if (options.length === 0) {
+    return <p className="mb-3 text-[0.8125rem] text-ink-3">Nenhuma câmera ou tela no ar para medir.</p>;
+  }
+  return (
+    <div role="radiogroup" aria-label="Trilha medida" className="mb-3 flex flex-wrap gap-1.5">
+      {options.map((t) => {
+        const key = tileKey(t);
+        const active = key === selected;
+        const Icon = t.source === Track.Source.ScreenShare ? MonitorUp : Video;
+        return (
+          <button
+            key={key}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onSelect(key)}
+            className={cn(
+              "flex h-8 max-w-full min-w-0 items-center gap-1.5 border px-2.5 text-[0.75rem] font-medium transition-colors [border-radius:var(--radius-cell)]",
+              active
+                ? "border-signal-line bg-signal-wash text-signal"
+                : "border-rule text-ink-2 hover:border-rule-3 hover:bg-band hover:text-ink",
+            )}
+          >
+            <Icon size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+            <span className="truncate">
+              {trackLabel(t)}
+              <span className="sr-only">{t.source === Track.Source.ScreenShare ? " (tela)" : " (câmera)"}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+type TileShared = {
+  pinnedKeys: string[];
+  canSideBySide: boolean;
+  onSideBySide: (key: string) => void;
+  onPopout: (trackRef: TrackReferenceOrPlaceholder, label: string, floating?: boolean) => void;
+  fullscreenEl: Element | null;
+  onTogglePin: (key: string) => void;
+  onToggleFullscreen: (element: Element | null) => void;
+  remote: RemoteViewer;
+  rcTextOpen: boolean;
+  setRcTextOpen: (open: boolean | ((v: boolean) => boolean)) => void;
+};
+
+/* ---------------------------------------------------------------------------
+   Grade de câmeras
+
+   Mede o palco e escolhe o número de colunas que dá o MAIOR quadro 16:9
+   possível. Um, dois ou nove participantes: o palco é sempre preenchido, e
+   redimensionar a janela recalcula na hora.
+   ------------------------------------------------------------------------ */
+const GRID_GAP = 12;
+const ASPECT = 16 / 9;
+
+/* ---------------------------------------------------------------------------
+   Palco dividido
+
+   Os quadros fixados lado a lado repartem o palco inteiro em células iguais.
+   Diferente da grade de câmeras, a célula não é um 16:9 encolhido: ela ocupa
+   toda a fatia, e o vídeo (contain) cresce até onde o formato dele deixa. O
+   número de colunas é o que dá a maior imagem 16:9 visível em cada célula, então
+   num monitor largo duas telas ficam lado a lado, e num estreito, empilhadas.
+   ------------------------------------------------------------------------ */
+function SplitStage({
+  tiles,
+  tileProps,
+  onExit,
+}: {
+  tiles: TrackReferenceOrPlaceholder[];
+  tileProps: TileShared;
+  onExit: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setBox({ w: width, h: height });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const n = tiles.length;
+  let bestCols = 1;
+  let bestW = -1;
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const cellW = (box.w - GRID_GAP * (cols - 1)) / cols;
+    const cellH = (box.h - GRID_GAP * (rows - 1)) / rows;
+    const visible = Math.min(cellW, cellH * ASPECT);
+    if (visible > bestW) {
+      bestW = visible;
+      bestCols = cols;
+    }
+  }
+  const rows = Math.ceil(n / bestCols);
+
+  return (
+    <div className="group/split relative flex min-h-0 flex-1">
+      <div
+        ref={ref}
+        className="grid min-h-0 min-w-0 flex-1"
+        style={{
+          gap: GRID_GAP,
+          gridTemplateColumns: `repeat(${bestCols}, minmax(0, 1fr))`,
+          gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+        }}
+      >
+        {tiles.map((t) => (
+          <div key={tileKey(t)} className="flex min-h-0 min-w-0">
+            <Tile trackRef={t} variant="stage" {...tileProps} />
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={onExit}
+        className="absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-md bg-black/55 px-2.5 py-1.5 text-[0.75rem] font-medium text-white opacity-0 backdrop-blur-sm transition-opacity duration-150 group-hover/split:opacity-100 hover:bg-black/75 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+      >
+        <X size={13} strokeWidth={2} aria-hidden />
+        Desfazer divisão
+      </button>
+    </div>
+  );
+}
+
+function CameraGrid({
+  tiles,
+  tileProps,
+}: {
+  tiles: TrackReferenceOrPlaceholder[];
+  tileProps: TileShared;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setBox({ w: width, h: height });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const n = tiles.length;
+  let best = { w: 0, h: 0 };
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const maxW = (box.w - GRID_GAP * (cols - 1)) / cols;
+    const maxH = (box.h - GRID_GAP * (rows - 1)) / rows;
+    const w = Math.max(0, Math.min(maxW, maxH * ASPECT));
+    if (w > best.w) best = { w, h: w / ASPECT };
+  }
+
+  return (
+    <div
+      ref={ref}
+      className="flex min-h-0 flex-1 flex-wrap content-center items-center justify-center"
+      style={{ gap: GRID_GAP }}
+    >
+      {box.w > 0
+        ? tiles.map((t) => (
+            <div
+              key={tileKey(t)}
+              className="transition-[width,height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+              style={{ width: Math.floor(best.w), height: Math.floor(best.h) }}
+            >
+              <Tile trackRef={t} variant="grid" {...tileProps} />
+            </div>
+          ))
+        : null}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Quadro
+
+   O vídeo fica sobre o fundo do monitor, escuro nos dois temas: é contra preto
+   que se avalia imagem. Tela compartilhada nunca é cortada (contain); câmera
+   preenche o quadro na grade e na faixa, e aparece inteira no destaque.
+   ------------------------------------------------------------------------ */
+function Tile({
+  trackRef,
+  variant,
+  pinnedKeys,
+  canSideBySide,
+  onSideBySide,
+  onPopout,
+  fullscreenEl,
+  onTogglePin,
+  onToggleFullscreen,
+  remote,
+  rcTextOpen,
+  setRcTextOpen,
+}: {
+  trackRef: TrackReferenceOrPlaceholder;
+  variant: "stage" | "grid" | "strip";
+} & TileShared) {
+  const ref = useRef<HTMLDivElement>(null);
+  const participant = trackRef.participant;
+  const key = tileKey(trackRef);
+  const isScreen = trackRef.source === Track.Source.ScreenShare;
+  const isPinned = pinnedKeys.includes(key);
+  const isFullscreen = fullscreenEl !== null && fullscreenEl === ref.current;
+
+  const speaking = useIsSpeaking(participant);
+  const micMuted = useIsMuted({
+    participant,
+    source: Track.Source.Microphone,
+    publication: participant.getTrackPublication(Track.Source.Microphone),
+  });
+  const videoMuted = useIsMuted(trackRef);
+  const hasVideo = isTrackReference(trackRef) && !videoMuted;
+
+  const name = participant.name || participant.identity || (participant.isLocal ? "Você" : "Participante");
+  const label = trackLabel(trackRef);
+  const small = variant === "strip";
+
+  // Controle remoto: só a tela de quem anuncia `rc.v` compatível (app de
+  // Windows, tela inteira, recurso ligado) oferece "Pedir controle".
+  const rcVersion = useParticipantAttribute(ATTR_VERSION, { participant });
+  const secureDesktop = useParticipantAttribute(ATTR_UAC, { participant }) === "1" && isScreen;
+  const rs = remote.state;
+  const isTarget = rs.phase !== "idle" && rs.target === participant.identity && isScreen;
+  const controlling =
+    isTarget && rs.phase === "active" && trackRef.publication?.trackSid === rs.trackSid;
+  const requesting = isTarget && rs.phase === "requesting";
+  const canRequest =
+    isScreen && !participant.isLocal && hasVideo && rcVersion === String(RC_VERSION) && rs.phase === "idle";
+
+  // Em tela cheia, nome e ações só aparecem quando o mouse mexe, e somem (com
+  // o cursor) depois de um tempo parado: o quadro é para ser assistido.
+  const [chromeAwake, setChromeAwake] = useState(true);
+  useEffect(() => {
+    const el = ref.current;
+    if (!isFullscreen || !el) {
+      setChromeAwake(true);
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const wake = () => {
+      setChromeAwake(true);
+      clearTimeout(timer);
+      timer = setTimeout(() => setChromeAwake(false), FULLSCREEN_IDLE_MS);
+    };
+    wake();
+    el.addEventListener("pointermove", wake);
+    el.addEventListener("pointerdown", wake);
+    el.addEventListener("keydown", wake);
+    return () => {
+      clearTimeout(timer);
+      el.removeEventListener("pointermove", wake);
+      el.removeEventListener("pointerdown", wake);
+      el.removeEventListener("keydown", wake);
+    };
+  }, [isFullscreen]);
+  const chromeHidden = isFullscreen && !chromeAwake;
+
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+
+  return (
+    <div
+      ref={ref}
+      data-rc-controlled={controlling ? "" : undefined}
+      // Controlando, o duplo clique e o botão direito são do PC remoto.
+      onDoubleClick={() => {
+        if (!controlling) onToggleFullscreen(ref.current);
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        if (!controlling) setMenu({ x: event.clientX, y: event.clientY });
+      }}
+      className={cn(
+        "group relative flex h-full w-full items-center justify-center overflow-hidden bg-monitor [border-radius:var(--radius-sheet)]",
+        "outline outline-2 -outline-offset-2 transition-[outline-color] duration-200",
+        controlling ? "outline-live" : speaking && !isScreen ? "outline-ok" : "outline-transparent",
+        isFullscreen && "[border-radius:0]",
+        chromeHidden && "cursor-none",
+      )}
+    >
+      {secureDesktop ? (
+        <p role="status" className="px-4 text-center text-sm text-white">O Windows está exibindo um aviso protegido.</p>
+      ) : hasVideo ? (
+        <VideoTrack
+          trackRef={trackRef}
+          className={cn(
+            "h-full w-full",
+            isScreen || variant === "stage" || isFullscreen ? "object-contain" : "object-cover",
+            participant.isLocal && !isScreen && "-scale-x-100",
+          )}
+        />
+      ) : (
+        <span
+          aria-hidden
+          className={cn(
+            "flex items-center justify-center rounded-full bg-white/10 font-semibold text-white/85",
+            small ? "size-10 text-[0.875rem]" : "size-16 text-[1.375rem] sm:size-20 sm:text-[1.75rem]",
+          )}
+        >
+          {initials(name)}
+        </span>
+      )}
+
+      {controlling && rs.phase === "active" ? (
+        <>
+          {rs.adminView && rs.adminView.desktop !== "normal" ? (
+            <SecureDesktop
+              key={rs.adminView.desktop === "prompt" ? rs.adminView.generation : rs.adminView.desktop}
+              view={rs.adminView}
+              onClick={remote.adminClick}
+              frame={rs.adminImage}
+            />
+          ) : !secureDesktop && hasVideo ? <ControlOverlay
+            send={remote.send}
+            sendClip={remote.sendClip}
+            label={`Tela de ${name}, controlada por você`}
+          /> : null}
+          <ControlToolbar
+            state={rs}
+            clip={remote.clipNotice}
+            hidden={chromeHidden}
+            bar={isFullscreen}
+            textOpen={rcTextOpen}
+            setTextOpen={setRcTextOpen}
+            onFullscreen={() => onToggleFullscreen(ref.current)}
+            onStop={remote.stop}
+            onAdmin={rs.adminStatus === "enabled" ? remote.stopAdmin : remote.requestAdmin}
+            send={remote.send}
+          />
+        </>
+      ) : null}
+
+      {/* Identificação: sempre legível sobre qualquer imagem. */}
+      <div
+        className={cn(
+          "pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-[0.75rem] font-medium text-white backdrop-blur-sm transition-opacity duration-300",
+          chromeHidden && "opacity-0",
+        )}
+      >
+        {isScreen ? (
+          <MonitorUp size={12} strokeWidth={2} aria-hidden className="shrink-0" />
+        ) : micMuted ? (
+          <MicOff size={12} strokeWidth={2} aria-hidden className="shrink-0 text-[#ff9b8a]" />
+        ) : null}
+        <span className="truncate">{label}</span>
+        {!isScreen && micMuted ? <span className="sr-only">, microfone mudo</span> : null}
+      </div>
+
+      {/* Ações do quadro: aparecem no hover e no foco; no toque, sempre. Em
+          tela cheia, só enquanto o mouse se mexe. */}
+      <div
+        hidden={controlling}
+        className={cn(
+          "absolute top-2 right-2 flex gap-1 transition-opacity duration-150",
+          isFullscreen
+            ? chromeHidden
+              ? "pointer-events-none opacity-0 duration-300"
+              : "opacity-100"
+            : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100",
+        )}
+      >
+        {!participant.isLocal ? (
+          <ParticipantVolume participant={participant as RemoteParticipant} kind={isScreen ? "screen" : "voice"} />
+        ) : null}
+        {canRequest ? (
+          <TileAction label={`Pedir para controlar a tela de ${name}`} onClick={() => remote.request(participant)}>
+            <MousePointer2 size={14} strokeWidth={1.75} aria-hidden />
+          </TileAction>
+        ) : null}
+        {requesting ? (
+          <TileAction label="Cancelar o pedido de controle" onClick={remote.cancel}>
+            <X size={14} strokeWidth={1.75} aria-hidden />
+          </TileAction>
+        ) : null}
+        {variant === "strip" && canSideBySide ? (
+          <TileAction
+            label={`Pôr ${label} lado a lado no destaque`}
+            onClick={() => onSideBySide(key)}
+          >
+            <Columns2 size={14} strokeWidth={1.75} aria-hidden />
+          </TileAction>
+        ) : null}
+        <TileAction
+          label={isPinned ? `Soltar ${label}` : `Fixar ${label} em destaque`}
+          onClick={() => onTogglePin(key)}
+        >
+          {isPinned ? (
+            <PinOff size={14} strokeWidth={1.75} aria-hidden />
+          ) : (
+            <Pin size={14} strokeWidth={1.75} aria-hidden />
+          )}
+        </TileAction>
+        <TileAction
+          label={isFullscreen ? "Sair da tela cheia" : `Tela cheia: ${label}`}
+          onClick={() => onToggleFullscreen(ref.current)}
+        >
+          <Maximize2 size={14} strokeWidth={1.75} aria-hidden />
+        </TileAction>
+      </div>
+
+      {menu ? (
+        <TileMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            canRequest
+              ? {
+                  label: "Pedir controle",
+                  icon: <MousePointer2 size={14} strokeWidth={1.75} aria-hidden />,
+                  onSelect: () => remote.request(participant),
+                }
+              : null,
+            {
+              label: "Abrir em nova janela",
+              icon: <ExternalLink size={14} strokeWidth={1.75} aria-hidden />,
+              disabled: !hasVideo,
+              onSelect: () => onPopout(trackRef, label),
+            },
+            {
+              label: "Janela flutuante",
+              icon: <PictureInPicture2 size={14} strokeWidth={1.75} aria-hidden />,
+              disabled: !hasVideo,
+              onSelect: () => onPopout(trackRef, label, true),
+            },
+            variant === "strip" && canSideBySide
+              ? {
+                  label: "Pôr lado a lado no destaque",
+                  icon: <Columns2 size={14} strokeWidth={1.75} aria-hidden />,
+                  onSelect: () => onSideBySide(key),
+                }
+              : null,
+            {
+              label: isPinned ? "Soltar do destaque" : "Fixar em destaque",
+              icon: isPinned ? (
+                <PinOff size={14} strokeWidth={1.75} aria-hidden />
+              ) : (
+                <Pin size={14} strokeWidth={1.75} aria-hidden />
+              ),
+              onSelect: () => onTogglePin(key),
+            },
+            {
+              label: isFullscreen ? "Sair da tela cheia" : "Tela cheia",
+              icon: <Maximize2 size={14} strokeWidth={1.75} aria-hidden />,
+              onSelect: () => onToggleFullscreen(ref.current),
+            },
+          ]}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+const FULLSCREEN_IDLE_MS = 2500;
+
+type TileMenuItem = {
+  label: string;
+  icon: React.ReactNode;
+  disabled?: boolean;
+  onSelect: () => void;
+};
+
+/**
+ * Menu do botão direito num quadro. Fica dentro do próprio quadro (com
+ * `position: fixed`) para continuar visível quando o quadro está em tela cheia.
+ */
+function TileMenu({
+  x,
+  y,
+  items,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  items: (TileMenuItem | null)[];
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+
+  // Encosta o menu para dentro da janela quando o clique foi perto da borda.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    setPos({
+      left: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
+      top: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
+    });
+    el.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }, [x, y]);
+
+  useEffect(() => {
+    const onPointer = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) onClose();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("pointerdown", onPointer, true);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onClose);
+    window.addEventListener("resize", onClose);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onClose);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      onContextMenu={(event) => event.preventDefault()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      className="fixed z-[70] min-w-[13rem] border border-rule-2 bg-sheet py-1 text-ink shadow-overlay [border-radius:var(--radius-sheet)]"
+      style={pos}
+    >
+      {items
+        .filter((item): item is TileMenuItem => item !== null)
+        .map((item) => (
+          <button
+            key={item.label}
+            type="button"
+            role="menuitem"
+            disabled={item.disabled}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+              item.onSelect();
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[0.8125rem] transition-colors hover:bg-band focus:bg-band focus:outline-none disabled:pointer-events-none disabled:opacity-40"
+          >
+            <span className="shrink-0 text-ink-2">{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+    </div>
+  );
+}
+
+function TileAction({
+  children,
+  label,
+  onClick,
+}: {
+  children: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      onDoubleClick={(event) => event.stopPropagation()}
+      className="flex size-8 items-center justify-center rounded-md bg-black/55 text-white backdrop-blur-sm transition-colors hover:bg-black/75"
+    >
+      {children}
+    </button>
+  );
+}
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0][0] ?? "";
+  const last = parts.length > 1 ? (parts[parts.length - 1][0] ?? "") : "";
+  return (first + last).toUpperCase();
+}
+
+function EmptyStage({ onShare }: { onShare: () => void }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 bg-sheet px-6 text-center shadow-lift [border-radius:var(--radius-sheet)]">
+      <LogoMark className="size-10" />
+      <div>
+        <p className="text-[1.0625rem] font-semibold tracking-[-0.01em] text-ink">
+          Ninguém está transmitindo ainda
+        </p>
+        <p className="mt-1.5 max-w-[40ch] text-[0.875rem] leading-[1.55] text-ink-2">
+          Compartilhe a tela inteira ou uma janela. O som do PC vai junto, sem a voz da
+          chamada — ou só o som da janela escolhida.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onShare}
+        className={buttonClass("primary", "lg")}
+      >
+        <MonitorUp size={17} strokeWidth={1.75} aria-hidden />
+        Compartilhar tela
+      </button>
+    </div>
+  );
+}
+
+function BarToggle({
+  children,
+  label,
+  open,
+  onClick,
+  badge,
+  badgeTone = "plain",
+}: {
+  children: React.ReactNode;
+  label: string;
+  open: boolean;
+  onClick: () => void;
+  badge?: number;
+  badgeTone?: "plain" | "signal";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={open}
+      aria-label={badge !== undefined ? `${label} (${badge})` : label}
+      title={label}
+      className={cn(
+        "flex h-9 items-center gap-1.5 border px-2.5 text-[0.8125rem] transition-colors [border-radius:var(--radius-cell)]",
+        open
+          ? "border-signal-line bg-signal-wash text-signal"
+          : "border-transparent text-ink-2 hover:border-rule hover:bg-band hover:text-ink",
+      )}
+    >
+      {children}
+      {badge !== undefined ? (
+        <span
+          className={cn(
+            "font-mono text-[0.75rem] [font-variant-numeric:tabular-nums]",
+            badgeTone === "signal" &&
+              "min-w-4 rounded-full bg-signal px-1 text-center text-[0.6875rem] font-semibold text-on-signal",
+          )}
+        >
+          {badge}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+/**
+ * Na barra da sala de quem está sendo controlado: quem controla, pausar e
+ * parar. A barra vermelha no topo do monitor faz o mesmo fora do app.
+ */
+function ControlledPill({
+  name,
+  paused,
+  elevated,
+  elevating,
+  onElevate,
+  admin,
+  onPause,
+  onStop,
+}: {
+  name: string;
+  paused: boolean;
+  /** Janela de administrador na frente: quem controla não alcança sem "Liberar". */
+  elevated: boolean;
+  elevating: boolean;
+  onElevate: () => void;
+  admin: boolean;
+  onPause: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      className="mr-1 flex h-9 items-center gap-1 border border-alert-line bg-alert-wash pr-1 pl-2.5 text-[0.8125rem] text-alert [border-radius:var(--radius-cell)]"
+      title={`Parar a qualquer momento: ${PANIC_SHORTCUT_LABEL}`}
+    >
+      <span aria-hidden className={cn("size-2 shrink-0 rounded-full bg-live", !paused && "animate-pulse")} />
+      <span className="max-w-[14rem] truncate font-medium">
+        {paused ? `Controle de ${name} pausado` : `${name} está controlando`}
+      </span>
+      {admin ? (
+        <button
+          type="button"
+          onClick={() => window.myscreen.remote.stopAdmin()}
+          title="Revogar acesso aos avisos do UAC"
+          className="h-7 px-2 text-[0.75rem] font-semibold hover:bg-alert-wash-2"
+        >
+          Revogar UAC
+        </button>
+      ) : null}
+      {elevated && !paused ? (
+        <button
+          type="button"
+          onClick={onElevate}
+          disabled={elevating}
+          title={`Há uma janela de administrador na frente (jogo, instalador). Deixa ${name} mexer nela; o Windows vai pedir confirmação.`}
+          className="ml-1 h-7 border border-alert-line px-2 text-[0.75rem] font-semibold transition-colors hover:bg-alert-wash-2 disabled:opacity-60 [border-radius:var(--radius-cell)]"
+        >
+          {elevating ? "Aguardando…" : "Liberar"}
+        </button>
+      ) : null}
+      <button
+        type="button"
+        onClick={onPause}
+        className="ml-1 h-7 px-2 text-[0.75rem] font-semibold transition-colors hover:bg-alert-wash-2 [border-radius:var(--radius-cell)]"
+      >
+        {paused ? "Retomar" : "Pausar"}
+      </button>
+      <button
+        type="button"
+        onClick={onStop}
+        className="h-7 bg-[#b42318] px-2.5 text-[0.75rem] font-semibold text-white transition-colors hover:bg-[#912018] [border-radius:var(--radius-cell)]"
+      >
+        Parar
+      </button>
+    </div>
+  );
+}
+
+/** Na barra da sala enquanto grava: quantos arquivos e há quanto tempo. */
+function RecordingPill({ count, since, onClick }: { count: number; since: number; onClick: () => void }) {
+  const now = useNow(true);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Gravações em andamento"
+      className="mr-1 flex h-9 items-center gap-2 border border-alert-line bg-alert-wash px-2.5 text-[0.8125rem] font-medium text-alert transition-colors hover:bg-alert-wash-2 [border-radius:var(--radius-cell)]"
+    >
+      <span aria-hidden className="size-2 shrink-0 animate-pulse rounded-full bg-live" />
+      <span>{count > 1 ? `Gravando ${count}` : "Gravando"}</span>
+      <span className="font-mono text-[0.75rem] [font-variant-numeric:tabular-nums]">{formatElapsed(now - since)}</span>
+    </button>
+  );
+}
+
+type CopyState = "idle" | "copied" | "error";
+
+function CopyLinkButton({ url }: { url: string }) {
+  const [state, setState] = useState<CopyState>("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  async function copy() {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("área de transferência indisponível");
+      await navigator.clipboard.writeText(url);
+      setState("copied");
+    } catch {
+      setState("error");
+    }
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setState("idle"), 2500);
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={copy}
+        title="Copiar link de convite"
+        className={cn(
+          "flex h-9 items-center gap-1.5 border px-2.5 text-[0.8125rem] font-medium transition-colors [border-radius:var(--radius-cell)]",
+          state === "copied"
+            ? "border-signal-line bg-signal-wash text-signal"
+            : state === "error"
+              ? "border-alert-line bg-alert-wash text-alert"
+              : "border-rule-2 bg-sheet text-ink hover:border-rule-3 hover:bg-band",
+        )}
+      >
+        {state === "copied" ? (
+          <Check size={16} strokeWidth={2} aria-hidden />
+        ) : (
+          <Link2 size={16} strokeWidth={1.75} aria-hidden />
+        )}
+        <span className="hidden sm:inline">
+          {state === "copied" ? "Copiado" : state === "error" ? "Falhou" : "Convidar"}
+        </span>
+      </button>
+      <span role="status" aria-live="polite" className="sr-only">
+        {state === "copied"
+          ? "Link de convite copiado."
+          : state === "error"
+            ? `Não foi possível copiar. O link é ${url}`
+            : ""}
+      </span>
+    </>
+  );
+}
+
+function Notice({
+  text,
+  action,
+  onDismiss,
+}: {
+  text: string;
+  action?: React.ReactNode;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      className="flex items-center gap-3 border-b border-rule px-4 py-2 last:border-b-0 sm:px-5"
+    >
+      <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warn-dot" />
+      <p className="min-w-0 flex-1 text-[0.8125rem] text-ink-2">{text}</p>
+      {action}
+      <button
+        type="button"
+        aria-label="Dispensar aviso"
+        onClick={onDismiss}
+        className="shrink-0 p-1 text-ink-3 transition-colors hover:text-ink"
+      >
+        <X size={14} strokeWidth={1.75} aria-hidden />
+      </button>
+    </div>
+  );
+}
