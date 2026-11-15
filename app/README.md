@@ -81,8 +81,12 @@ npm run check          # tipos + Vitest + cargo test
 npm run build && npm run test:e2e   # ponta a ponta no app real (não toca o servidor;
                                     # controle remoto em dry-run, sem mexer no mouse)
 npm run dist           # instalador → release/MyScreen-Setup-<versão>.exe
-npm run publish:desktop  # dist + envio por SSH (ver server/README.md)
+npm run publish:desktop  # à mão: dist + envio por SSH (ver server/README.md)
 ```
+
+**Release:** suba a versão em `package.json` e dê push no `master`. O GitHub Actions testa, gera o
+instalador e cria a release; o servidor puxa a versão nova para o feed em até 3 minutos e o app
+de quem usa atualiza sozinho ([server/README.md](server/README.md#3-publicar-uma-versão)).
 
 O servidor padrão vem de `MYSCREEN_SERVER_URL` no build (padrão `https://myscreen.haumea.fun`) e
 pode ser trocado em **Configurações → Servidor** (https, ou http só para localhost).

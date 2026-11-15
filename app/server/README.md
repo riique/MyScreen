@@ -48,14 +48,28 @@ depois da primeira publicação.
 
 ## 3. Publicar uma versão
 
-Na máquina Windows de build, com `~/.ssh/config` apontando o host `myscreen`:
+**Automático (padrão):** suba a versão em `app/package.json` e dê push no `master`. O workflow
+[`release-app.yml`](../../.github/workflows/release-app.yml) roda os testes, gera o instalador e
+cria a release `vX.Y.Z` no GitHub. O servidor, que fica na rede local e não é alcançado pelo
+GitHub, busca a release sozinho a cada 3 minutos com [`sync-feed.py`](sync-feed.py): baixa
+`.exe` + `.blockmap`, confere o sha512 contra o `latest.yml`, copia para
+`MyScreen-Setup-latest.exe` e troca o `latest.yml` por último. Nunca volta versão.
+
+Instalação no servidor (uma vez, como o dono de `/opt/myscreen/releases`):
+
+```bash
+( crontab -l 2>/dev/null; echo '*/3 * * * * /usr/bin/python3 /srv/myscreen/app/server/sync-feed.py >> $HOME/myscreen-sync-feed.log 2>&1' ) | crontab -
+```
+
+**À mão (reserva):** na máquina Windows de build, com `~/.ssh/config` apontando o host `ubuntu`:
 
 ```powershell
 npm run publish:desktop
 ```
 
 O script gera o instalador, envia `.exe` + `.blockmap`, copia para `MyScreen-Setup-latest.exe`
-(link estável para o site) e troca o `latest.yml` por último, com `mv` atômico.
+(link estável para o site) e troca o `latest.yml` por último, com `mv` atômico. Depois crie a
+release `vX.Y.Z` no GitHub com os mesmos arquivos, ou o workflow cria no próximo push.
 
 ## 4. Mudanças opcionais no site (repositório `MyScreen/`)
 

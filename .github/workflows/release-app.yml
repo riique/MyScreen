@@ -1,0 +1,105 @@
+# Release do app de Windows a cada push no master que suba a versão.
+#
+# - Só publica quando a versão de app/package.json ainda não tem release
+#   (tag vX.Y.Z). Push sem subir a versão roda nada além da checagem.
+# - O feed de atualização (myscreen.haumea.fun/downloads/) NÃO recebe nada
+#   daqui: o servidor fica na rede local, então ele mesmo busca a release nova
+#   (app/server/sync-feed.py no cron) e troca o latest.yml.
+name: Release do app
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "app/**"
+      - ".github/workflows/release-app.yml"
+  workflow_dispatch:
+    inputs:
+      so_build:
+        description: "Só testar e compilar, sem publicar release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-app
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versão
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(node -p "require('./package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.so_build }}" = "true" ]; then
+            echo "::notice::Só build: nada será publicado."
+          elif gh release view "v$v" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$v já tem release; nada a publicar (suba a versão em app/package.json)."
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.v.outputs.exists != 'true'
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Rust
+        if: steps.v.outputs.exists != 'true'
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.v.outputs.exists != 'true'
+        with:
+          workspaces: app/native
+
+      - name: Dependências
+        if: steps.v.outputs.exists != 'true'
+        run: npm ci
+
+      - name: Testes
+        if: steps.v.outputs.exists != 'true'
+        run: npm run check
+
+      - name: Instalador
+        if: steps.v.outputs.exists != 'true'
+        run: npm run dist
+
+      - uses: actions/upload-artifact@v4
+        if: inputs.so_build
+        with:
+          name: instalador
+          path: app/release/MyScreen-Setup-*.exe
+          retention-days: 3
+
+      - name: Release no GitHub
+        if: steps.v.outputs.exists != 'true' && !inputs.so_build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          test -f "release/MyScreen-Setup-$V.exe"
+          git log -1 --format=%B | grep -v '^Co-Authored-By:' > notes.md
+          printf '\nInstalador para Windows x64, sem assinatura digital. Quem já usa o MyScreen recebe esta versão pela atualização automática.\n' >> notes.md
+          gh release create "v$V" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "MyScreen $V para Windows" \
+            --notes-file notes.md \
+            "release/MyScreen-Setup-$V.exe" \
+            "release/MyScreen-Setup-$V.exe.blockmap" \
+            release/latest.yml
