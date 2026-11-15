@@ -35,7 +35,7 @@ jobs:
         working-directory: app
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Versão
         id: v
@@ -51,7 +51,7 @@ jobs:
             echo "::notice::v$v já tem release; nada a publicar (suba a versão em app/package.json)."
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         if: steps.v.outputs.exists != 'true'
         with:
           node-version: 24
@@ -79,7 +79,7 @@ jobs:
         if: steps.v.outputs.exists != 'true'
         run: npm run dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: inputs.so_build
         with:
           name: instalador
