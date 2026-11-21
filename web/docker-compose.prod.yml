@@ -75,6 +75,8 @@ services:
       # está numa sala também manda áudios pelo app (POST), então a pasta é
       # gravável — no host ela precisa ser do uid 1001 (`nextjs`):
       #   sudo chown -R 1001:1001 /opt/myscreen/sounds
+      # Pelo app também dá para renomear um áudio e apagá-lo; apagar pede a
+      # senha, que o `.env` pode trocar com SOUNDS_DELETE_PASSWORD.
       # O histórico do chat (mensagens e anexos) mora em /app/data/chat, no
       # mesmo volume do banco.
       - /opt/myscreen/sounds:/app/sounds

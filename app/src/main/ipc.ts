@@ -23,10 +23,12 @@ import {
   chatHistory,
   chatUploadFile,
   createRoom,
+  deleteSound,
   desktopInfo,
   fetchSound,
   getRoom,
   listSounds,
+  renameSound,
   token,
   uploadSound,
 } from "./server";
@@ -178,6 +180,12 @@ export function registerIpc(): void {
   handle("api:fetchSound", (_e, id) => fetchSound(asString(id, "soundId", 200)));
   handle("api:uploadSound", (_e, roomToken, name, bytes) =>
     uploadSound(asString(roomToken, "roomToken", 4096), asString(name, "name", 260), asBytes(bytes, "bytes", 25 * 1024 * 1024)),
+  );
+  handle("api:renameSound", (_e, roomToken, id, name) =>
+    renameSound(asString(roomToken, "roomToken", 4096), asString(id, "soundId", 200), asString(name, "name", 100)),
+  );
+  handle("api:deleteSound", (_e, roomToken, id, password) =>
+    deleteSound(asString(roomToken, "roomToken", 4096), asString(id, "soundId", 200), asString(password, "password", 200)),
   );
   handle("api:chatHistory", (_e, roomId, roomToken) => chatHistory(parseRoomId(roomId), asString(roomToken, "roomToken", 4096)));
   handle("api:chatUploadFile", (_e, roomId, roomToken, raw) => {

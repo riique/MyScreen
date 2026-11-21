@@ -266,6 +266,36 @@ export async function uploadSound(roomToken: string, name: string, bytes: Uint8A
   }
 }
 
+/** `PATCH /api/sounds/:id`: nome novo para um áudio da lista. */
+export async function renameSound(roomToken: string, id: string, name: string): Promise<ApiResult<SoundInfo>> {
+  try {
+    const res = await authed(`/api/sounds/${encodeURIComponent(id)}`, roomToken, { method: "PATCH", json: { name } });
+    const data = await jsonOf(res);
+    if (res.status === 405) return fail(405, "O servidor ainda não permite renomear áudios.");
+    if (!res.ok) return errorFrom(res.status, data, retryAfterOf(res), "Não foi possível renomear o áudio.");
+    const s = ((data as { sound?: unknown } | null)?.sound ?? {}) as Record<string, unknown>;
+    if (typeof s.id !== "string") return fail(502, "O servidor respondeu sem o áudio.");
+    return {
+      ok: true,
+      data: { id: s.id, name: typeof s.name === "string" ? s.name : s.id, size: typeof s.size === "number" ? s.size : 0 },
+    };
+  } catch (error) {
+    return networkError(error);
+  }
+}
+
+/** `DELETE /api/sounds/:id`: some da lista de todos. Pede a senha. */
+export async function deleteSound(roomToken: string, id: string, password: string): Promise<ApiResult<null>> {
+  try {
+    const res = await authed(`/api/sounds/${encodeURIComponent(id)}`, roomToken, { method: "DELETE", json: { password } });
+    if (res.ok) return { ok: true, data: null };
+    if (res.status === 405) return fail(405, "O servidor ainda não permite apagar áudios.");
+    return errorFrom(res.status, await jsonOf(res), retryAfterOf(res), "Não foi possível apagar o áudio.");
+  } catch (error) {
+    return networkError(error);
+  }
+}
+
 const roomPath = (roomId: string) => `/api/rooms/${encodeURIComponent(roomId)}/chat`;
 
 /** `GET /api/rooms/:id/chat`. Servidor sem a rota: histórico vazio. */

@@ -228,6 +228,10 @@ export interface DesktopBridge {
     fetchSound(id: string): Promise<ApiResult<Uint8Array>>;
     /** Manda um áudio do computador para a lista do servidor (token da sala como prova). */
     uploadSound(roomToken: string, name: string, bytes: Uint8Array): Promise<ApiResult<SoundInfo>>;
+    /** Troca o nome de um áudio da lista (a extensão fica). */
+    renameSound(roomToken: string, id: string, name: string): Promise<ApiResult<SoundInfo>>;
+    /** Apaga um áudio da lista de todos; o servidor pede a senha. */
+    deleteSound(roomToken: string, id: string, password: string): Promise<ApiResult<null>>;
     /** Histórico do chat da sala, guardado no servidor. */
     chatHistory(roomId: string, roomToken: string): Promise<ApiResult<StoredChatMessage[]>>;
     chatUploadFile(

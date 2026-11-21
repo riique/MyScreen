@@ -1,4 +1,5 @@
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { link, mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -113,6 +114,72 @@ export async function soundCount(dir = soundsDir()): Promise<number> {
     return (await readdir(dir)).filter(isSoundFileName).length;
   } catch {
     return 0;
+  }
+}
+
+/**
+ * Senha para apagar um áudio da lista. Renomear qualquer um na sala pode;
+ * apagar some com o arquivo para todo mundo, então pede a senha. O `.env`
+ * do servidor pode trocá-la (`SOUNDS_DELETE_PASSWORD`).
+ */
+const DEFAULT_DELETE_PASSWORD = "123riique123";
+
+export function checkDeletePassword(given: unknown): boolean {
+  if (typeof given !== "string" || !given || given.length > 200) return false;
+  const expected = process.env.SOUNDS_DELETE_PASSWORD || DEFAULT_DELETE_PASSWORD;
+  // Hash dos dois lados: o tamanho da senha certa não vaza pelo tempo.
+  const a = createHash("sha256").update(given).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Troca o nome de um áudio, mantendo a extensão original. `link` + `unlink`
+ * em vez de `rename`: o `rename` sobrescreveria um áudio que já tem o nome
+ * novo, e o `link` falha com EEXIST nesse caso.
+ */
+export async function renameSound(
+  id: string,
+  newName: string,
+  dir = soundsDir()
+): Promise<SoundEntry | "not-found" | "invalid" | "exists"> {
+  if (!isSoundFileName(id)) return "not-found";
+  const ext = path.extname(id);
+  const target = soundFileNameFrom(`${newName}${ext}`);
+  // Nome que só tinha caracteres proibidos vira "audio": não é o que a pessoa pediu.
+  if (!target || !isSoundFileName(target)) return "invalid";
+  if (target === `audio${ext}` && newName.trim().toLowerCase() !== "audio") return "invalid";
+  const from = path.join(dir, id);
+  let size: number;
+  try {
+    const s = await stat(from);
+    if (!s.isFile()) return "not-found";
+    size = s.size;
+  } catch {
+    return "not-found";
+  }
+  if (target === id) return { id, name: id.slice(0, -ext.length), size };
+  try {
+    await link(from, path.join(dir, target));
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") return "exists";
+    if (code === "ENOENT") return "not-found";
+    throw err;
+  }
+  await unlink(from).catch(() => {});
+  return { id: target, name: target.slice(0, -ext.length), size };
+}
+
+/** Apaga um áudio da pasta. Já não existia: `false`. */
+export async function deleteSound(id: string, dir = soundsDir()): Promise<boolean> {
+  if (!isSoundFileName(id)) return false;
+  try {
+    await unlink(path.join(dir, id));
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
   }
 }
 

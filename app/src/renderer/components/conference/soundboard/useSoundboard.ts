@@ -40,6 +40,10 @@ export interface SoundboardState {
   /** Áudio do computador sendo enviado ao servidor (nome), ou null. */
   uploading: string | null;
   upload: (file: File) => void;
+  /** Troca o nome; resolve com o erro (ou null quando deu certo). */
+  rename: (sound: SoundInfo, name: string) => Promise<string | null>;
+  /** Apaga com a senha; resolve com o erro (ou null quando deu certo). */
+  remove: (sound: SoundInfo, password: string) => Promise<string | null>;
 }
 
 /**
@@ -261,6 +265,16 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
     [context, output, stopSource, unpublish, unpublishLater],
   );
 
+  /** Avisa a sala que a lista mudou: quem está com o painel aberto recarrega. */
+  const announce = useCallback(
+    (id: string) => {
+      void room.localParticipant
+        .publishData(new TextEncoder().encode(id), { reliable: true, topic: SOUNDS_CHANGED_TOPIC })
+        .catch(() => {});
+    },
+    [room],
+  );
+
   const upload = useCallback(
     (file: File) => {
       setError(null);
@@ -275,9 +289,7 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
           if (!r.ok) throw new Error(r.error);
           refresh();
           // Os outros não precisam esperar reabrir o painel para ver o áudio novo.
-          void room.localParticipant
-            .publishData(new TextEncoder().encode(r.data.id), { reliable: true, topic: SOUNDS_CHANGED_TOPIC })
-            .catch(() => {});
+          announce(r.data.id);
         } catch (err) {
           if (!disposed.current) setError(err instanceof Error && err.message ? err.message : "Não foi possível enviar o áudio.");
         } finally {
@@ -285,7 +297,50 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
         }
       })();
     },
-    [refresh, room],
+    [refresh, announce],
+  );
+
+  const rename = useCallback(
+    async (sound: SoundInfo, name: string): Promise<string | null> => {
+      const trimmed = name.trim();
+      if (!trimmed) return "Escreva o nome novo do áudio.";
+      if (trimmed === sound.name) return null;
+      const r = await window.myscreen.api.renameSound(tokenRef.current, sound.id, trimmed);
+      if (disposed.current) return null;
+      if (!r.ok) return r.error;
+      // O id é o nome do arquivo: o som já decodificado segue com o nome novo.
+      const buffer = buffers.current.get(sound.id);
+      if (buffer) {
+        buffers.current.delete(sound.id);
+        buffers.current.set(r.data.id, buffer);
+      }
+      if (playingId === sound.id) setPlayingId(r.data.id);
+      setSounds((list) =>
+        list
+          ? list
+              .map((s) => (s.id === sound.id ? r.data : s))
+              .sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true }))
+          : list,
+      );
+      announce(r.data.id);
+      return null;
+    },
+    [announce, playingId],
+  );
+
+  const remove = useCallback(
+    async (sound: SoundInfo, password: string): Promise<string | null> => {
+      if (!password) return "Digite a senha para apagar.";
+      const r = await window.myscreen.api.deleteSound(tokenRef.current, sound.id, password);
+      if (disposed.current) return null;
+      // Já tinha sumido do servidor: para a lista, dá no mesmo.
+      if (!r.ok && r.status !== 404) return r.error;
+      buffers.current.delete(sound.id);
+      setSounds((list) => (list ? list.filter((s) => s.id !== sound.id) : list));
+      announce(sound.id);
+      return null;
+    },
+    [announce],
   );
 
   // Alguém mandou um áudio: a lista já carregada se atualiza sozinha.
@@ -313,5 +368,5 @@ export function useSoundboard(room: Room, roomToken: string): SoundboardState {
     };
   }, [stopSource, unpublish]);
 
-  return { sounds, listError, playingId, loadingId, error, refresh, play, stop, uploading, upload };
+  return { sounds, listError, playingId, loadingId, error, refresh, play, stop, uploading, upload, rename, remove };
 }

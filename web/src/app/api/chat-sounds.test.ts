@@ -8,6 +8,7 @@ import { DELETE as deleteChat } from "@/app/api/rooms/[id]/chat/[messageId]/rout
 import { POST as uploadChatFile } from "@/app/api/rooms/[id]/chat/files/route";
 import { GET as getChatFile } from "@/app/api/rooms/[id]/chat/files/[fileId]/route";
 import { GET as listSounds, POST as uploadSound } from "@/app/api/sounds/route";
+import { DELETE as deleteSound, PATCH as renameSound } from "@/app/api/sounds/[id]/route";
 
 let dir: string;
 beforeAll(async () => {
@@ -88,5 +89,37 @@ describe("API do chat e dos áudios", () => {
     expect(res.status).toBe(201);
     const list = await (await listSounds(req("/api/sounds", jwt))).json();
     expect(list.sounds.map((s: { id: string }) => s.id)).toEqual(["Buzina.mp3"]);
+  });
+
+  it("renomeia sem sobrescrever e só apaga com a senha", async () => {
+    const jwt = await tokenFor("qualquer", "zé");
+    const up = (name: string) => {
+      const f = new FormData();
+      f.append("file", new Blob([new Uint8Array([4, 5, 6])]), name);
+      return uploadSound(req("/api/sounds", jwt, { method: "POST", body: f }));
+    };
+    expect((await up("Grito.mp3")).status).toBe(201);
+    const names = async () =>
+      ((await (await listSounds(req("/api/sounds", jwt))).json()).sounds as { id: string }[]).map((s) => s.id).sort();
+
+    const patch = (id: string, body: unknown, token = jwt) =>
+      renameSound(req(`/api/sounds/${id}`, token, { method: "PATCH", body: JSON.stringify(body) }), ctx({ id }));
+    const del = (id: string, body: unknown) =>
+      deleteSound(req(`/api/sounds/${id}`, jwt, { method: "DELETE", body: JSON.stringify(body) }), ctx({ id }));
+
+    expect((await renameSound(new Request("http://x", { method: "PATCH", body: "{}" }), ctx({ id: "Grito.mp3" }))).status).toBe(401);
+    expect((await patch("Grito.mp3", { name: "Buzina" })).status).toBe(409);
+    expect((await patch("Grito.mp3", { name: "???" })).status).toBe(400);
+    expect((await patch("Nada.mp3", { name: "x" })).status).toBe(404);
+    const ok = await patch("Grito.mp3", { name: "Grito alto" });
+    expect(ok.status).toBe(200);
+    expect((await ok.json()).sound).toMatchObject({ id: "Grito alto.mp3", name: "Grito alto", size: 3 });
+    expect(await names()).toEqual(["Buzina.mp3", "Grito alto.mp3"]);
+
+    expect((await del("Buzina.mp3", {})).status).toBe(403);
+    expect((await del("Buzina.mp3", { password: "errada" })).status).toBe(403);
+    expect((await del("Buzina.mp3", { password: "123riique123" })).status).toBe(204);
+    expect((await del("Buzina.mp3", { password: "123riique123" })).status).toBe(404);
+    expect(await names()).toEqual(["Grito alto.mp3"]);
   });
 });
