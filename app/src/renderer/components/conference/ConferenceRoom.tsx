@@ -66,6 +66,7 @@ import { formatElapsed } from "@shared/recording";
 import { RecordDialog, useNow, type RecordOption } from "./recording/RecordDialog";
 import { SoundboardControl } from "./soundboard/SoundboardControl";
 import { useSoundboard } from "./soundboard/useSoundboard";
+import { useCallSounds } from "./callSounds";
 import { useRecording } from "./recording/useRecording";
 import { writeMediaPrefs } from "@/lib/storage";
 import {
@@ -376,6 +377,8 @@ function ConferenceStage({
 
   /* --- Áudios do servidor (o botão só aparece para quem ligou; o som, todos ouvem) */
   const soundboard = useSoundboard(room, token);
+  // Som de entrada e de saída: cada um toca no próprio alto-falante, então todos ouvem.
+  useCallSounds(room);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);

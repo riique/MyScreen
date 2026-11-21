@@ -47,6 +47,7 @@ import {
 } from "@/components/site/capturePrefs";
 import { ShareDialog } from "./ShareDialog";
 import { openCompanionAudio, readCompanion, type CompanionAudio } from "./companionAudio";
+import { useCallSounds } from "./callSounds";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import { chooseScreenCodec, isSvcCodec, type CodecProbe } from "@/lib/codec";
@@ -290,6 +291,8 @@ function ConferenceStage({
   // O chat vive aqui, e não no painel: o painel desmonta ao fechar, e com ele
   // iriam o histórico e o rascunho.
   const chat = useChat();
+  // Som de entrada e de saída: cada um toca no próprio alto-falante, então todos ouvem.
+  useCallSounds(room);
   const [chatDraft, setChatDraft] = useState("");
   const [chatSeen, setChatSeen] = useState(0);
   const chatCount = chat.chatMessages.length;
