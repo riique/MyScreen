@@ -67,6 +67,7 @@ import { RecordDialog, useNow, type RecordOption } from "./recording/RecordDialo
 import { SoundboardControl } from "./soundboard/SoundboardControl";
 import { useSoundboard } from "./soundboard/useSoundboard";
 import { useCallSounds } from "./callSounds";
+import { useLeftShares, type LeftShares } from "./useLeftShares";
 import { useRecording } from "./recording/useRecording";
 import { writeMediaPrefs } from "@/lib/storage";
 import {
@@ -101,6 +102,8 @@ import {
   Users,
   Video,
   X,
+  EyeOff,
+  Eye,
 } from "lucide-react";
 
 /** Nomes de erro de mídia que valem uma explicação, e não um "erro desconhecido". */
@@ -379,6 +382,8 @@ function ConferenceStage({
   const soundboard = useSoundboard(room, token);
   // Som de entrada e de saída: cada um toca no próprio alto-falante, então todos ouvem.
   useCallSounds(room);
+  // Transmissões de que eu saí: não recebo a tela nem o som delas até voltar.
+  const leftShares = useLeftShares(room);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
@@ -878,7 +883,13 @@ function ConferenceStage({
   const pinnedTiles = pinned
     .map((key) => allTiles.find((t) => tileKey(t) === key))
     .filter((t): t is TrackReferenceOrPlaceholder => t !== undefined);
-  const focusTiles = pinnedTiles.length > 0 ? pinnedTiles : screenShareRefs[0] ? [screenShareRefs[0]] : [];
+  // Transmissão de que saí não toma o destaque sozinha; fica na faixa, com "Voltar".
+  const isLeftShare = (t: TrackReferenceOrPlaceholder) =>
+    t.source === Track.Source.ScreenShare && !t.participant.isLocal && leftShares.left.has(t.participant.identity);
+  const autoFocus = screenShareRefs.find((t) => !isLeftShare(t));
+  const focusTiles = pinnedTiles.length > 0 ? pinnedTiles : autoFocus ? [autoFocus] : [];
+  // Sem destaque, as transmissões deixadas entram na grade junto das câmeras.
+  const gridTiles = [...screenShareRefs.filter(isLeftShare), ...cameraTiles];
   const focusKeys = focusTiles.map(tileKey);
   const focus = focusTiles[0];
   const strip = focus ? allTiles.filter((t) => !focusKeys.includes(tileKey(t))) : [];
@@ -970,7 +981,8 @@ function ConferenceStage({
     for (const [key, popout] of popouts.current) {
       const tile = allTiles.find((t) => tileKey(t) === popout.tileKey);
       const track = tile?.publication?.track?.mediaStreamTrack;
-      if (popout.win.closed || !tile) {
+      // Saí da transmissão: a janela dela fecha junto.
+      if (popout.win.closed || !tile || isLeftShare(tile)) {
         if (!popout.win.closed) popout.win.close();
         popouts.current.delete(key);
       } else if (track && track !== popout.track) {
@@ -1081,6 +1093,7 @@ function ConferenceStage({
     remote: remoteViewer,
     rcTextOpen,
     setRcTextOpen,
+    leftShares,
   };
 
   return (
@@ -1217,8 +1230,8 @@ function ConferenceStage({
                 </div>
               ) : null}
             </div>
-          ) : cameraTiles.length > 0 ? (
-            <CameraGrid tiles={cameraTiles} tileProps={tileProps} />
+          ) : gridTiles.length > 0 ? (
+            <CameraGrid tiles={gridTiles} tileProps={tileProps} />
           ) : (
             <EmptyStage onShare={() => setIsShareDialogOpen(true)} />
           )}
@@ -1237,6 +1250,10 @@ function ConferenceStage({
                 isSending={chat.isSending}
                 draft={chatDraft}
                 onDraftChange={setChatDraft}
+                onArchive={roomChat.archive}
+                listArchives={roomChat.listArchives}
+                openArchive={roomChat.openArchive}
+                archiveVersion={roomChat.archiveVersion}
               />
             ) : panel === "people" ? (
               <ParticipantsList isOpen onClose={() => setPanel(null)} />
@@ -1520,6 +1537,7 @@ type TileShared = {
   remote: RemoteViewer;
   rcTextOpen: boolean;
   setRcTextOpen: (open: boolean | ((v: boolean) => boolean)) => void;
+  leftShares: LeftShares;
 };
 
 /* ---------------------------------------------------------------------------
@@ -1680,6 +1698,7 @@ function Tile({
   remote,
   rcTextOpen,
   setRcTextOpen,
+  leftShares,
 }: {
   trackRef: TrackReferenceOrPlaceholder;
   variant: "stage" | "grid" | "strip";
@@ -1698,7 +1717,10 @@ function Tile({
     publication: participant.getTrackPublication(Track.Source.Microphone),
   });
   const videoMuted = useIsMuted(trackRef);
-  const hasVideo = isTrackReference(trackRef) && !videoMuted;
+  // Transmissão de outra pessoa: dá para sair dela (e voltar) só para mim.
+  const canLeave = isScreen && !participant.isLocal;
+  const isLeft = canLeave && leftShares.left.has(participant.identity);
+  const hasVideo = isTrackReference(trackRef) && !videoMuted && !isLeft;
 
   const name = participant.name || participant.identity || (participant.isLocal ? "Você" : "Participante");
   const label = trackLabel(trackRef);
@@ -1766,7 +1788,26 @@ function Tile({
         chromeHidden && "cursor-none",
       )}
     >
-      {secureDesktop ? (
+      {isLeft ? (
+        <div className="flex flex-col items-center gap-2 px-3 text-center text-white">
+          <EyeOff size={small ? 18 : 26} strokeWidth={1.5} aria-hidden className="text-white/70" />
+          {small ? null : (
+            <p className="text-[0.8125rem] text-white/80">Você saiu desta transmissão. A tela e o som não chegam até você.</p>
+          )}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              leftShares.rejoin(participant.identity);
+            }}
+            onDoubleClick={(event) => event.stopPropagation()}
+            className="inline-flex items-center gap-1.5 rounded-md bg-white/15 px-3 py-1.5 text-[0.8125rem] font-medium text-white transition-colors hover:bg-white/25"
+          >
+            <Eye size={14} strokeWidth={1.75} aria-hidden />
+            Voltar à transmissão
+          </button>
+        </div>
+      ) : secureDesktop ? (
         <p role="status" className="px-4 text-center text-sm text-white">O Windows está exibindo um aviso protegido.</p>
       ) : hasVideo ? (
         <VideoTrack
@@ -1847,8 +1888,19 @@ function Tile({
             : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100",
         )}
       >
-        {!participant.isLocal ? (
+        {!participant.isLocal && !isLeft ? (
           <ParticipantVolume participant={participant as RemoteParticipant} kind={isScreen ? "screen" : "voice"} />
+        ) : null}
+        {canLeave && !isLeft ? (
+          <TileAction
+            label={`Sair da transmissão de ${name} (deixar de ver e ouvir)`}
+            onClick={() => {
+              if (isFullscreen) onToggleFullscreen(ref.current);
+              leftShares.leave(participant.identity);
+            }}
+          >
+            <EyeOff size={14} strokeWidth={1.75} aria-hidden />
+          </TileAction>
         ) : null}
         {canRequest ? (
           <TileAction label={`Pedir para controlar a tela de ${name}`} onClick={() => remote.request(participant)}>
@@ -1892,6 +1944,22 @@ function Tile({
           y={menu.y}
           onClose={() => setMenu(null)}
           items={[
+            canLeave
+              ? isLeft
+                ? {
+                    label: "Voltar à transmissão",
+                    icon: <Eye size={14} strokeWidth={1.75} aria-hidden />,
+                    onSelect: () => leftShares.rejoin(participant.identity),
+                  }
+                : {
+                    label: "Sair da transmissão",
+                    icon: <EyeOff size={14} strokeWidth={1.75} aria-hidden />,
+                    onSelect: () => {
+                      if (isFullscreen) onToggleFullscreen(ref.current);
+                      leftShares.leave(participant.identity);
+                    },
+                  }
+              : null,
             canRequest
               ? {
                   label: "Pedir controle",

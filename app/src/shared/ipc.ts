@@ -97,6 +97,17 @@ export interface ChatFileInfo {
   size: number;
 }
 
+/** Uma conversa arquivada: o chat da sala recomeçou, e ela ficou guardada à parte. */
+export interface ChatArchiveSummary {
+  id: string;
+  createdAt: number;
+  archivedByName: string;
+  messageCount: number;
+  fileCount: number;
+  firstAt: number;
+  lastAt: number;
+}
+
 /** Uma mensagem do histórico do chat da sala, como o servidor guardou. */
 export interface StoredChatMessage {
   id: string;
@@ -246,6 +257,12 @@ export interface DesktopBridge {
     ): Promise<ApiResult<null>>;
     chatDelete(roomId: string, roomToken: string, messageId: string): Promise<ApiResult<null>>;
     chatFile(roomId: string, roomToken: string, fileId: string): Promise<ApiResult<Uint8Array>>;
+    /** Guarda a conversa atual à parte e deixa o chat da sala vazio. */
+    chatArchive(roomId: string, roomToken: string): Promise<ApiResult<{ archive: ChatArchiveSummary; archivedIds: string[] }>>;
+    /** As conversas arquivadas da sala, da mais nova para a mais antiga. */
+    chatArchives(roomId: string, roomToken: string): Promise<ApiResult<ChatArchiveSummary[]>>;
+    /** As mensagens de uma conversa arquivada. */
+    chatArchiveMessages(roomId: string, roomToken: string, archiveId: string): Promise<ApiResult<StoredChatMessage[]>>;
   };
   capture: {
     list(): Promise<CaptureSource[]>;

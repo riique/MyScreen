@@ -48,6 +48,7 @@ import {
 import { ShareDialog } from "./ShareDialog";
 import { openCompanionAudio, readCompanion, type CompanionAudio } from "./companionAudio";
 import { useCallSounds } from "./callSounds";
+import { useLeftShares, type LeftShares } from "./useLeftShares";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import { chooseScreenCodec, isSvcCodec, type CodecProbe } from "@/lib/codec";
@@ -72,7 +73,12 @@ import {
   Volume2,
   VolumeX,
   X,
+  Eye,
+  EyeOff,
 } from "lucide-react";
+
+/** O app avisa a sala com este tópico quando arquiva a conversa do chat. */
+const CHAT_ARCHIVE_TOPIC = "myscreen.chat.archived";
 
 /** Nomes de erro de mídia que valem uma explicação, e não um "erro desconhecido". */
 const MEDIA_ERROR_NAMES = new Set([
@@ -291,8 +297,25 @@ function ConferenceStage({
   // O chat vive aqui, e não no painel: o painel desmonta ao fechar, e com ele
   // iriam o histórico e o rascunho.
   const chat = useChat();
+  // Alguém arquivou a conversa pelo app: o chat recomeça vazio aqui também.
+  // As mensagens antigas ficam em "Conversas salvas", no app.
+  const [chatCutoff, setChatCutoff] = useState(0);
+  const chatLength = useRef(0);
+  chatLength.current = chat.chatMessages.length;
+  useEffect(() => {
+    const onData = (_payload: Uint8Array, participant?: unknown, _k?: unknown, topic?: string) => {
+      if (topic === CHAT_ARCHIVE_TOPIC && participant) setChatCutoff(chatLength.current);
+    };
+    room.on(RoomEvent.DataReceived, onData);
+    return () => {
+      room.off(RoomEvent.DataReceived, onData);
+    };
+  }, [room]);
+  const chatMessages = useMemo(() => chat.chatMessages.slice(chatCutoff), [chat.chatMessages, chatCutoff]);
   // Som de entrada e de saída: cada um toca no próprio alto-falante, então todos ouvem.
   useCallSounds(room);
+  // Transmissões de que eu saí: não recebo a tela nem o som delas até voltar.
+  const leftShares = useLeftShares(room);
   const [chatDraft, setChatDraft] = useState("");
   const [chatSeen, setChatSeen] = useState(0);
   const chatCount = chat.chatMessages.length;
@@ -774,8 +797,13 @@ function ConferenceStage({
   const pinnedTiles = pinned
     .map((key) => allTiles.find((t) => tileKey(t) === key))
     .filter((t): t is TrackReferenceOrPlaceholder => t !== undefined);
-  const focusTiles =
-    pinnedTiles.length > 0 ? pinnedTiles : screenShareRefs[0] ? [screenShareRefs[0]] : [];
+  // Transmissão de que saí não toma o destaque sozinha; fica na faixa, com "Voltar".
+  const isLeftShare = (t: TrackReferenceOrPlaceholder) =>
+    t.source === Track.Source.ScreenShare && !t.participant.isLocal && leftShares.left.has(t.participant.identity);
+  const autoFocus = screenShareRefs.find((t) => !isLeftShare(t));
+  const focusTiles = pinnedTiles.length > 0 ? pinnedTiles : autoFocus ? [autoFocus] : [];
+  // Sem destaque, as transmissões deixadas entram na grade junto das câmeras.
+  const gridTiles = [...screenShareRefs.filter(isLeftShare), ...cameraTiles];
   const focusKeys = focusTiles.map(tileKey);
   const focus = focusTiles[0];
   const strip = focus ? allTiles.filter((t) => !focusKeys.includes(tileKey(t))) : [];
@@ -833,7 +861,8 @@ function ConferenceStage({
     for (const [key, popout] of popouts.current) {
       const tile = allTiles.find((t) => tileKey(t) === key);
       const track = tile?.publication?.track?.mediaStreamTrack;
-      if (popout.win.closed || !tile) {
+      // Saí da transmissão: a janela dela fecha junto.
+      if (popout.win.closed || !tile || isLeftShare(tile)) {
         if (!popout.win.closed) popout.win.close();
         popouts.current.delete(key);
       } else if (track && track !== popout.track) {
@@ -910,6 +939,7 @@ function ConferenceStage({
     fullscreenEl,
     onTogglePin: togglePin,
     onToggleFullscreen: toggleFullscreen,
+    leftShares,
   };
 
   return (
@@ -1026,8 +1056,8 @@ function ConferenceStage({
                 </div>
               ) : null}
             </div>
-          ) : cameraTiles.length > 0 ? (
-            <CameraGrid tiles={cameraTiles} tileProps={tileProps} />
+          ) : gridTiles.length > 0 ? (
+            <CameraGrid tiles={gridTiles} tileProps={tileProps} />
           ) : (
             <EmptyStage onShare={() => setIsShareDialogOpen(true)} />
           )}
@@ -1039,7 +1069,7 @@ function ConferenceStage({
               <ChatSidebar
                 isOpen
                 onClose={() => setPanel(null)}
-                chatMessages={chat.chatMessages}
+                chatMessages={chatMessages}
                 send={chat.send}
                 isSending={chat.isSending}
                 draft={chatDraft}
@@ -1196,6 +1226,7 @@ type TileShared = {
   fullscreenEl: Element | null;
   onTogglePin: (key: string) => void;
   onToggleFullscreen: (element: Element | null) => void;
+  leftShares: LeftShares;
 };
 
 /* ---------------------------------------------------------------------------
@@ -1353,6 +1384,7 @@ function Tile({
   fullscreenEl,
   onTogglePin,
   onToggleFullscreen,
+  leftShares,
 }: {
   trackRef: TrackReferenceOrPlaceholder;
   variant: "stage" | "grid" | "strip";
@@ -1371,7 +1403,10 @@ function Tile({
     publication: participant.getTrackPublication(Track.Source.Microphone),
   });
   const videoMuted = useIsMuted(trackRef);
-  const hasVideo = isTrackReference(trackRef) && !videoMuted;
+  // Transmissão de outra pessoa: dá para sair dela (e voltar) só para mim.
+  const canLeave = isScreen && !participant.isLocal;
+  const isLeft = canLeave && leftShares.left.has(participant.identity);
+  const hasVideo = isTrackReference(trackRef) && !videoMuted && !isLeft;
 
   const name = participant.name || participant.identity || (participant.isLocal ? "Você" : "Participante");
   const label = isScreen
@@ -1441,7 +1476,26 @@ function Tile({
         chromeHidden && "cursor-none",
       )}
     >
-      {hasVideo ? (
+      {isLeft ? (
+        <div className="flex flex-col items-center gap-2 px-3 text-center text-white">
+          <EyeOff size={small ? 18 : 26} strokeWidth={1.5} aria-hidden className="text-white/70" />
+          {small ? null : (
+            <p className="text-[0.8125rem] text-white/80">Você saiu desta transmissão. A tela e o som não chegam até você.</p>
+          )}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              leftShares.rejoin(participant.identity);
+            }}
+            onDoubleClick={(event) => event.stopPropagation()}
+            className="inline-flex items-center gap-1.5 rounded-md bg-white/15 px-3 py-1.5 text-[0.8125rem] font-medium text-white transition-colors hover:bg-white/25"
+          >
+            <Eye size={14} strokeWidth={1.75} aria-hidden />
+            Voltar à transmissão
+          </button>
+        </div>
+      ) : hasVideo ? (
         <VideoTrack
           trackRef={trackRef}
           className={cn(
@@ -1490,8 +1544,17 @@ function Tile({
             : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100",
         )}
       >
-        {isScreen && !participant.isLocal ? (
-          <ScreenVolume participant={participant as RemoteParticipant} />
+        {canLeave && !isLeft ? <ScreenVolume participant={participant as RemoteParticipant} /> : null}
+        {canLeave && !isLeft ? (
+          <TileAction
+            label={`Sair da transmissão de ${name} (deixar de ver e ouvir)`}
+            onClick={() => {
+              if (isFullscreen) onToggleFullscreen(ref.current);
+              leftShares.leave(participant.identity);
+            }}
+          >
+            <EyeOff size={14} strokeWidth={1.75} aria-hidden />
+          </TileAction>
         ) : null}
         {variant === "strip" && canSideBySide ? (
           <TileAction
@@ -1525,6 +1588,22 @@ function Tile({
           y={menu.y}
           onClose={() => setMenu(null)}
           items={[
+            canLeave
+              ? isLeft
+                ? {
+                    label: "Voltar à transmissão",
+                    icon: <Eye size={14} strokeWidth={1.75} aria-hidden />,
+                    onSelect: () => leftShares.rejoin(participant.identity),
+                  }
+                : {
+                    label: "Sair da transmissão",
+                    icon: <EyeOff size={14} strokeWidth={1.75} aria-hidden />,
+                    onSelect: () => {
+                      if (isFullscreen) onToggleFullscreen(ref.current);
+                      leftShares.leave(participant.identity);
+                    },
+                  }
+              : null,
             {
               label: "Abrir em nova janela",
               icon: <ExternalLink size={14} strokeWidth={1.75} aria-hidden />,

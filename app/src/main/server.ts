@@ -1,5 +1,5 @@
 import { app, net } from "electron";
-import type { ApiResult, ChatFileInfo, RoomInfo, SoundInfo, StoredChatMessage, TokenResponse } from "../shared/ipc";
+import type { ApiResult, ChatArchiveSummary, ChatFileInfo, RoomInfo, SoundInfo, StoredChatMessage, TokenResponse } from "../shared/ipc";
 import { getSettings } from "./settings";
 
 /**
@@ -298,6 +298,43 @@ export async function deleteSound(roomToken: string, id: string, password: strin
 
 const roomPath = (roomId: string) => `/api/rooms/${encodeURIComponent(roomId)}/chat`;
 
+function asMessages(raw: unknown): StoredChatMessage[] {
+  const out: StoredChatMessage[] = [];
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const r = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
+    if (typeof r.id !== "string" || typeof r.timestamp !== "number") continue;
+    const attributes: Record<string, string> = {};
+    if (typeof r.attributes === "object" && r.attributes !== null) {
+      for (const [k, v] of Object.entries(r.attributes)) if (typeof v === "string") attributes[k] = v;
+    }
+    out.push({
+      id: r.id,
+      timestamp: r.timestamp,
+      message: typeof r.message === "string" ? r.message : "",
+      attributes,
+      fromIdentity: typeof r.fromIdentity === "string" ? r.fromIdentity : "",
+      fromName: typeof r.fromName === "string" ? r.fromName : "",
+      files: (Array.isArray(r.files) ? r.files : []).map(asChatFile).filter((f): f is ChatFileInfo => f !== null),
+    });
+  }
+  return out;
+}
+
+function asArchiveSummary(raw: unknown): ChatArchiveSummary | null {
+  const r = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+  if (typeof r.id !== "string" || !/^[0-9a-f]{32}$/.test(r.id)) return null;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    id: r.id,
+    createdAt: num(r.createdAt),
+    archivedByName: typeof r.archivedByName === "string" ? r.archivedByName.slice(0, 64) : "",
+    messageCount: num(r.messageCount),
+    fileCount: num(r.fileCount),
+    firstAt: num(r.firstAt),
+    lastAt: num(r.lastAt),
+  };
+}
+
 /** `GET /api/rooms/:id/chat`. Servidor sem a rota: histórico vazio. */
 export async function chatHistory(roomId: string, roomToken: string): Promise<ApiResult<StoredChatMessage[]>> {
   try {
@@ -305,26 +342,7 @@ export async function chatHistory(roomId: string, roomToken: string): Promise<Ap
     if (res.status === 404 || res.status === 405) return { ok: true, data: [] };
     const data = await jsonOf(res);
     if (!res.ok) return errorFrom(res.status, data, retryAfterOf(res), "Não foi possível carregar o histórico do chat.");
-    const raw = (data as { messages?: unknown } | null)?.messages;
-    const out: StoredChatMessage[] = [];
-    for (const item of Array.isArray(raw) ? raw : []) {
-      const r = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
-      if (typeof r.id !== "string" || typeof r.timestamp !== "number") continue;
-      const attributes: Record<string, string> = {};
-      if (typeof r.attributes === "object" && r.attributes !== null) {
-        for (const [k, v] of Object.entries(r.attributes)) if (typeof v === "string") attributes[k] = v;
-      }
-      out.push({
-        id: r.id,
-        timestamp: r.timestamp,
-        message: typeof r.message === "string" ? r.message : "",
-        attributes,
-        fromIdentity: typeof r.fromIdentity === "string" ? r.fromIdentity : "",
-        fromName: typeof r.fromName === "string" ? r.fromName : "",
-        files: (Array.isArray(r.files) ? r.files : []).map(asChatFile).filter((f): f is ChatFileInfo => f !== null),
-      });
-    }
-    return { ok: true, data: out };
+    return { ok: true, data: asMessages((data as { messages?: unknown } | null)?.messages) };
   } catch (error) {
     return networkError(error);
   }
@@ -365,6 +383,58 @@ export async function chatDelete(roomId: string, roomToken: string, messageId: s
     const res = await authed(`${roomPath(roomId)}/${encodeURIComponent(messageId)}`, roomToken, { method: "DELETE" });
     if (res.ok) return { ok: true, data: null };
     return errorFrom(res.status, await jsonOf(res), retryAfterOf(res), "Não foi possível apagar a mensagem.");
+  } catch (error) {
+    return networkError(error);
+  }
+}
+
+/** `POST /api/rooms/:id/chat/archives`: a conversa vai para o arquivo e o chat recomeça. */
+export async function chatArchive(
+  roomId: string,
+  roomToken: string,
+): Promise<ApiResult<{ archive: ChatArchiveSummary; archivedIds: string[] }>> {
+  try {
+    const res = await authed(`${roomPath(roomId)}/archives`, roomToken, { method: "POST" });
+    const data = await jsonOf(res);
+    if (res.status === 404 || res.status === 405) return fail(res.status, "O servidor ainda não permite arquivar o chat.");
+    if (!res.ok) return errorFrom(res.status, data, retryAfterOf(res), "Não foi possível arquivar a conversa.");
+    const d = (data ?? {}) as { archive?: unknown; archivedIds?: unknown };
+    const archive = asArchiveSummary(d.archive);
+    if (!archive) return fail(502, "O servidor respondeu sem a conversa arquivada.");
+    const archivedIds = Array.isArray(d.archivedIds) ? d.archivedIds.filter((x): x is string => typeof x === "string") : [];
+    return { ok: true, data: { archive, archivedIds } };
+  } catch (error) {
+    return networkError(error);
+  }
+}
+
+/** `GET /api/rooms/:id/chat/archives`. Servidor sem a rota: nenhuma conversa salva. */
+export async function chatArchives(roomId: string, roomToken: string): Promise<ApiResult<ChatArchiveSummary[]>> {
+  try {
+    const res = await authed(`${roomPath(roomId)}/archives`, roomToken);
+    if (res.status === 404 || res.status === 405) return { ok: true, data: [] };
+    const data = await jsonOf(res);
+    if (!res.ok) return errorFrom(res.status, data, retryAfterOf(res), "Não foi possível carregar as conversas salvas.");
+    const raw = (data as { archives?: unknown } | null)?.archives;
+    const list = (Array.isArray(raw) ? raw : []).map(asArchiveSummary).filter((a): a is ChatArchiveSummary => a !== null);
+    return { ok: true, data: list };
+  } catch (error) {
+    return networkError(error);
+  }
+}
+
+/** `GET /api/rooms/:id/chat/archives/:archiveId`: as mensagens de uma conversa salva. */
+export async function chatArchiveMessages(
+  roomId: string,
+  roomToken: string,
+  archiveId: string,
+): Promise<ApiResult<StoredChatMessage[]>> {
+  try {
+    const res = await authed(`${roomPath(roomId)}/archives/${encodeURIComponent(archiveId)}`, roomToken);
+    const data = await jsonOf(res);
+    if (!res.ok) return errorFrom(res.status, data, retryAfterOf(res), "Não foi possível abrir a conversa salva.");
+    const archive = (data as { archive?: { messages?: unknown } } | null)?.archive;
+    return { ok: true, data: asMessages(archive?.messages) };
   } catch (error) {
     return networkError(error);
   }

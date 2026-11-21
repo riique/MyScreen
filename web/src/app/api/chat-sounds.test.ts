@@ -7,6 +7,8 @@ import { GET as listChat, POST as appendChat } from "@/app/api/rooms/[id]/chat/r
 import { DELETE as deleteChat } from "@/app/api/rooms/[id]/chat/[messageId]/route";
 import { POST as uploadChatFile } from "@/app/api/rooms/[id]/chat/files/route";
 import { GET as getChatFile } from "@/app/api/rooms/[id]/chat/files/[fileId]/route";
+import { GET as listArchives, POST as archiveChat } from "@/app/api/rooms/[id]/chat/archives/route";
+import { GET as getArchive } from "@/app/api/rooms/[id]/chat/archives/[archiveId]/route";
 import { GET as listSounds, POST as uploadSound } from "@/app/api/sounds/route";
 import { DELETE as deleteSound, PATCH as renameSound } from "@/app/api/sounds/[id]/route";
 
@@ -73,6 +75,54 @@ describe("API do chat e dos áudios", () => {
     expect((await deleteChat(req("/x", ana, { method: "DELETE" }), ctx({ id: "sala1", messageId: "msg-1" }))).status).toBe(204);
     const after = await (await listChat(req("/api/rooms/sala1/chat", bob), ctx({ id: "sala1" }))).json();
     expect(after.messages).toEqual([]);
+  });
+
+  it("arquivar guarda a conversa e os anexos e deixa o chat vazio", async () => {
+    const ana = await tokenFor("sala3", "ana");
+    const bob = await tokenFor("sala3", "bob");
+    const room = ctx({ id: "sala3" });
+
+    expect((await archiveChat(req("/x", ana, { method: "POST" }), room)).status).toBe(409);
+
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array([9, 8])], { type: "image/png" }), "foto.png");
+    const { file } = await (await uploadChatFile(req("/x", ana, { method: "POST", body: form }), room)).json();
+    for (const [id, fileIds] of [["m1", [file.id]], ["m2", []]] as const) {
+      const r = await appendChat(
+        req("/x", ana, { method: "POST", body: JSON.stringify({ id, timestamp: Date.now(), message: id, fileIds }) }),
+        room
+      );
+      expect(r.status).toBe(201);
+    }
+
+    const other = await tokenFor("sala9", "eve");
+    expect((await archiveChat(req("/x", other, { method: "POST" }), room)).status).toBe(403);
+
+    const res = await archiveChat(req("/x", bob, { method: "POST" }), room);
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.archivedIds).toEqual(["m1", "m2"]);
+    expect(body.archive).toMatchObject({ archivedByName: "bob", messageCount: 2, fileCount: 1 });
+
+    // Chat novo, vazio, e a conversa antiga à parte.
+    expect((await (await listChat(req("/x", ana), room)).json()).messages).toEqual([]);
+    const list = (await (await listArchives(req("/x", ana), room)).json()).archives;
+    expect(list).toHaveLength(1);
+    expect(list[0].messages).toBeUndefined();
+
+    const full = await getArchive(req("/x", ana), ctx({ id: "sala3", archiveId: list[0].id }));
+    expect(full.status).toBe(200);
+    const archived = (await full.json()).archive;
+    expect(archived.messages.map((m: { message: string }) => m.message)).toEqual(["m1", "m2"]);
+
+    // O anexo da conversa arquivada continua baixando, mesmo depois de outra mensagem (que limpa órfãos).
+    await appendChat(req("/x", ana, { method: "POST", body: JSON.stringify({ id: "m3", timestamp: Date.now(), message: "nova" }) }), room);
+    const dl = await getChatFile(req("/x", bob), ctx({ id: "sala3", fileId: file.id }));
+    expect(dl.status).toBe(200);
+    expect(new Uint8Array(await dl.arrayBuffer())).toEqual(new Uint8Array([9, 8]));
+
+    expect((await getArchive(req("/x", ana), ctx({ id: "sala3", archiveId: "f".repeat(32) }))).status).toBe(404);
+    expect((await getArchive(req("/x", other), ctx({ id: "sala3", archiveId: list[0].id }))).status).toBe(403);
   });
 
   it("qualquer um na sala manda áudio; quem não está, não", async () => {

@@ -1,7 +1,7 @@
 import type { ReceivedChatMessage } from "@livekit/components-react";
 import { RoomEvent, type Room } from "livekit-client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { StoredChatMessage } from "@shared/ipc";
+import type { ChatArchiveSummary, StoredChatMessage } from "@shared/ipc";
 
 /** Um anexo na tela: o `File` que chegou pela sala, ou um id do histórico no servidor. */
 export interface ChatAttachment {
@@ -31,6 +31,11 @@ export type ChatSend = (
 
 /** Aviso na sala: "apaguei a mensagem X". Cada um tira da própria tela. */
 const DELETE_TOPIC = "myscreen.chat.delete";
+/**
+ * Aviso na sala: "arquivei a conversa". Cada um limpa o próprio chat — o
+ * site também escuta este tópico. Corpo: `{ archivedIds: string[] }`.
+ */
+export const ARCHIVE_TOPIC = "myscreen.chat.archived";
 
 export interface RoomChat {
   entries: ChatEntry[];
@@ -38,6 +43,14 @@ export interface RoomChat {
   remove: (id: string) => Promise<void>;
   /** Busca os bytes de um anexo do histórico (com cache). */
   loadFile: (attachment: ChatAttachment) => Promise<Blob>;
+  /** Guarda a conversa atual à parte e começa um chat novo, para todos. */
+  archive: () => Promise<void>;
+  /** As conversas guardadas da sala, da mais nova para a mais antiga. */
+  listArchives: () => Promise<ChatArchiveSummary[]>;
+  /** As mensagens de uma conversa guardada, prontas para mostrar. */
+  openArchive: (id: string) => Promise<ChatEntry[]>;
+  /** Muda quando alguém arquiva: a lista de conversas salvas precisa recarregar. */
+  archiveVersion: number;
 }
 
 /**
@@ -62,6 +75,7 @@ export function useRoomChat({
 }): RoomChat {
   const [history, setHistory] = useState<StoredChatMessage[]>([]);
   const [deleted, setDeleted] = useState<ReadonlySet<string>>(() => new Set());
+  const [archiveVersion, setArchiveVersion] = useState(0);
   const tokenRef = useRef(roomToken);
   tokenRef.current = roomToken;
   const fileCache = useRef(new Map<string, Promise<Blob>>());
@@ -85,16 +99,7 @@ export function useRoomChat({
     const out: ChatEntry[] = [];
     for (const m of history) {
       if (liveIds.has(m.id)) continue;
-      out.push({
-        id: m.id,
-        timestamp: m.timestamp,
-        message: m.message,
-        attributes: m.attributes,
-        fromIdentity: m.fromIdentity,
-        fromName: m.fromName,
-        isLocal: m.fromIdentity !== "" && m.fromIdentity === myIdentity,
-        files: m.files.map((f) => ({ name: f.name, size: f.size, type: f.type, remoteId: f.id })),
-      });
+      out.push(storedEntry(m, myIdentity));
     }
     for (const m of live) {
       out.push({
@@ -115,8 +120,32 @@ export function useRoomChat({
   // Apagar só vale vindo do autor: compara quem avisou com quem mandou.
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
+
+  /**
+   * A conversa foi arquivada (por mim ou por outro): some da tela tudo o que
+   * estava nela, inclusive mensagens ao vivo que o servidor nunca guardou.
+   * O que chegar depois já é do chat novo.
+   */
+  const clearArchived = useCallback((archivedIds: string[]) => {
+    const gone = new Set([...archivedIds, ...entriesRef.current.map((e) => e.id)]);
+    setDeleted((cur) => new Set([...cur, ...gone]));
+    setHistory((cur) => cur.filter((m) => !gone.has(m.id)));
+    setArchiveVersion((v) => v + 1);
+  }, []);
+
   useEffect(() => {
     const onData = (payload: Uint8Array, participant?: { identity: string }, _k?: unknown, topic?: string) => {
+      if (topic === ARCHIVE_TOPIC && participant) {
+        let ids: string[] = [];
+        try {
+          const raw = JSON.parse(new TextDecoder().decode(payload)) as { archivedIds?: unknown };
+          if (Array.isArray(raw.archivedIds)) ids = raw.archivedIds.filter((x): x is string => typeof x === "string");
+        } catch {
+          // Aviso sem corpo: limpa o que está na tela.
+        }
+        clearArchived(ids);
+        return;
+      }
       if (topic !== DELETE_TOPIC || !participant) return;
       const id = new TextDecoder().decode(payload).slice(0, 128);
       const entry = entriesRef.current.find((e) => e.id === id);
@@ -127,7 +156,7 @@ export function useRoomChat({
     return () => {
       room.off(RoomEvent.DataReceived, onData);
     };
-  }, [room]);
+  }, [room, clearArchived]);
 
   const send = useCallback<ChatSend>(
     async (message, options) => {
@@ -191,5 +220,44 @@ export function useRoomChat({
     [roomId],
   );
 
-  return { entries, send, remove, loadFile };
+  const archive = useCallback(async () => {
+    const r = await window.myscreen.api.chatArchive(roomId, tokenRef.current);
+    if (!r.ok) throw new Error(r.error);
+    clearArchived(r.data.archivedIds);
+    // Só os ids do servidor vão no aviso: cada um limpa o resto da própria tela.
+    const body = JSON.stringify({ archivedIds: r.data.archivedIds.slice(0, 500) });
+    await room.localParticipant
+      .publishData(new TextEncoder().encode(body), { reliable: true, topic: ARCHIVE_TOPIC })
+      .catch(() => {});
+  }, [room, roomId, clearArchived]);
+
+  const listArchives = useCallback(async () => {
+    const r = await window.myscreen.api.chatArchives(roomId, tokenRef.current);
+    if (!r.ok) throw new Error(r.error);
+    return r.data;
+  }, [roomId]);
+
+  const openArchive = useCallback(
+    async (id: string) => {
+      const r = await window.myscreen.api.chatArchiveMessages(roomId, tokenRef.current, id);
+      if (!r.ok) throw new Error(r.error);
+      return r.data.map((m) => storedEntry(m, myIdentity)).sort((a, b) => a.timestamp - b.timestamp);
+    },
+    [roomId, myIdentity],
+  );
+
+  return { entries, send, remove, loadFile, archive, listArchives, openArchive, archiveVersion };
+}
+
+function storedEntry(m: StoredChatMessage, myIdentity: string): ChatEntry {
+  return {
+    id: m.id,
+    timestamp: m.timestamp,
+    message: m.message,
+    attributes: m.attributes,
+    fromIdentity: m.fromIdentity,
+    fromName: m.fromName,
+    isLocal: m.fromIdentity !== "" && m.fromIdentity === myIdentity,
+    files: m.files.map((f) => ({ name: f.name, size: f.size, type: f.type, remoteId: f.id })),
+  };
 }

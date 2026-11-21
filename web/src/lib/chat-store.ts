@@ -19,6 +19,8 @@ const MAX_MESSAGES = 2_000;
 const MAX_ROOM_FILE_BYTES = 2 * 1024 * 1024 * 1024;
 /** Arquivo enviado e nunca preso a uma mensagem (envio que falhou no meio). */
 const ORPHAN_MS = 60 * 60 * 1000;
+/** Conversas arquivadas por sala; acima disso a mais antiga sai (com os arquivos). */
+const MAX_ARCHIVES = 100;
 
 export interface StoredFile {
   id: string;
@@ -179,6 +181,124 @@ export function appendMessage(
   });
 }
 
+/* --- Conversas arquivadas ----------------------------------------------------
+   "Arquivar" tira a conversa inteira do chat e a guarda à parte: o chat da sala
+   recomeça vazio e a conversa antiga continua legível, com os anexos. Os
+   arquivos não mudam de lugar (`files/`): o arquivo da conversa só passa a
+   citá-los, e a limpeza de órfãos conta essas citações. */
+
+export interface ArchiveSummary {
+  id: string;
+  createdAt: number;
+  /** Quem arquivou (nome na sala). */
+  archivedByName: string;
+  messageCount: number;
+  fileCount: number;
+  /** Hora da primeira e da última mensagem. */
+  firstAt: number;
+  lastAt: number;
+}
+
+export interface ChatArchive extends ArchiveSummary {
+  messages: StoredMessage[];
+}
+
+const ARCHIVE_ID = /^[0-9a-f]{32}$/;
+
+export function isArchiveId(id: string): boolean {
+  return ARCHIVE_ID.test(id);
+}
+
+function archivesDir(dir: string): string {
+  return path.join(dir, "archives");
+}
+
+function summaryOf(a: ChatArchive): ArchiveSummary {
+  return {
+    id: a.id,
+    createdAt: a.createdAt,
+    archivedByName: a.archivedByName,
+    messageCount: a.messageCount,
+    fileCount: a.fileCount,
+    firstAt: a.firstAt,
+    lastAt: a.lastAt,
+  };
+}
+
+async function readArchives(dir: string): Promise<ChatArchive[]> {
+  let names: string[];
+  try {
+    names = await readdir(archivesDir(dir));
+  } catch {
+    return [];
+  }
+  const out: ChatArchive[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".json") || !isArchiveId(name.slice(0, -5))) continue;
+    try {
+      const a = JSON.parse(await readFile(path.join(archivesDir(dir), name), "utf8")) as ChatArchive;
+      if (a && Array.isArray(a.messages)) out.push(a);
+    } catch {
+      // Arquivo corrompido: fica de fora da lista.
+    }
+  }
+  return out.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export type ArchiveResult = { ok: true; archive: ArchiveSummary; archivedIds: string[] } | { ok: false; error: "empty" };
+
+/**
+ * Move a conversa atual para um arquivo e deixa o chat vazio. As duas
+ * escritas vão na fila da sala: nenhuma mensagem nova cai no meio delas.
+ */
+export function archiveChat(roomId: string, archivedByName: string, base = chatDir()): Promise<ArchiveResult> {
+  return serialized(roomId, async () => {
+    const dir = roomDir(roomId, base);
+    const messages = await readMessages(dir);
+    if (messages.length === 0) return { ok: false, error: "empty" };
+    const archive: ChatArchive = {
+      id: randomUUID().replace(/-/g, ""),
+      createdAt: Date.now(),
+      archivedByName: archivedByName.slice(0, 64),
+      messageCount: messages.length,
+      fileCount: messages.reduce((n, m) => n + m.files.length, 0),
+      firstAt: messages[0].timestamp,
+      lastAt: messages[messages.length - 1].timestamp,
+      messages,
+    };
+    await mkdir(archivesDir(dir), { recursive: true });
+    const file = path.join(archivesDir(dir), `${archive.id}.json`);
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    await writeFile(tmp, JSON.stringify(archive));
+    await rename(tmp, file);
+    // Só esvazia depois do arquivo gravado: uma falha no meio não perde nada.
+    await writeMessages(dir, []);
+
+    const archives = await readArchives(dir);
+    for (const old of archives.slice(MAX_ARCHIVES)) {
+      await unlink(path.join(archivesDir(dir), `${old.id}.json`)).catch(() => {});
+    }
+    await prune(dir, []);
+    return { ok: true, archive: summaryOf(archive), archivedIds: messages.map((m) => m.id) };
+  });
+}
+
+export async function listArchives(roomId: string, base = chatDir()): Promise<ArchiveSummary[]> {
+  return (await readArchives(roomDir(roomId, base))).map(summaryOf);
+}
+
+export async function readArchive(roomId: string, archiveId: string, base = chatDir()): Promise<ChatArchive | null> {
+  if (!isArchiveId(archiveId)) return null;
+  try {
+    const a = JSON.parse(
+      await readFile(path.join(archivesDir(roomDir(roomId, base)), `${archiveId}.json`), "utf8")
+    ) as ChatArchive;
+    return a && Array.isArray(a.messages) ? a : null;
+  } catch {
+    return null;
+  }
+}
+
 export type DeleteResult = "deleted" | "missing" | "forbidden";
 
 /** Só o autor apaga. Os anexos da mensagem saem do disco junto. */
@@ -208,6 +328,10 @@ async function prune(dir: string, messages: StoredMessage[]): Promise<void> {
   }
 
   const referenced = new Set(messages.flatMap((m) => m.files.map((f) => f.id)));
+  // Anexos das conversas arquivadas continuam no disco.
+  for (const a of await readArchives(dir)) {
+    for (const m of a.messages) for (const f of m.files) referenced.add(f.id);
+  }
   const filesDir = path.join(dir, "files");
   let names: string[];
   try {

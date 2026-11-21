@@ -18,6 +18,9 @@ import {
 } from "./security";
 import {
   chatAppend,
+  chatArchive,
+  chatArchiveMessages,
+  chatArchives,
   chatDelete,
   chatFile,
   chatHistory,
@@ -214,6 +217,11 @@ export function registerIpc(): void {
   );
   handle("api:chatFile", (_e, roomId, roomToken, fileId) =>
     chatFile(parseRoomId(roomId), asString(roomToken, "roomToken", 4096), asString(fileId, "fileId", 64)),
+  );
+  handle("api:chatArchive", (_e, roomId, roomToken) => chatArchive(parseRoomId(roomId), asString(roomToken, "roomToken", 4096)));
+  handle("api:chatArchives", (_e, roomId, roomToken) => chatArchives(parseRoomId(roomId), asString(roomToken, "roomToken", 4096)));
+  handle("api:chatArchiveMessages", (_e, roomId, roomToken, archiveId) =>
+    chatArchiveMessages(parseRoomId(roomId), asString(roomToken, "roomToken", 4096), asString(archiveId, "archiveId", 64)),
   );
 
   // --- captura

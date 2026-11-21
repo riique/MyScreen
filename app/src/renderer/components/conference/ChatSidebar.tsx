@@ -1,4 +1,18 @@
-import { Download, FileText, ImagePlus, LoaderCircle, MessageSquare, Paperclip, Send, Smile, Trash2, X } from "lucide-react";
+import {
+  Archive,
+  ArrowLeft,
+  Download,
+  FileText,
+  History,
+  ImagePlus,
+  LoaderCircle,
+  MessageSquare,
+  Paperclip,
+  Send,
+  Smile,
+  Trash2,
+  X,
+} from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   formatBytes,
@@ -7,6 +21,7 @@ import {
   type ChatBlock,
   type ChatInline,
 } from "@shared/chatText";
+import type { ChatArchiveSummary } from "@shared/ipc";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment, ChatEntry, ChatSend } from "./useRoomChat";
 
@@ -43,7 +58,16 @@ interface ChatSidebarProps {
   /** O rascunho vive fora do painel: fechar o chat não apaga o que foi digitado. */
   draft: string;
   onDraftChange: React.Dispatch<React.SetStateAction<string>>;
+  /** Guarda a conversa em "Conversas salvas" e começa um chat novo para todos. */
+  onArchive: () => Promise<void>;
+  listArchives: () => Promise<ChatArchiveSummary[]>;
+  openArchive: (id: string) => Promise<ChatEntry[]>;
+  /** Muda quando alguém arquiva: a lista de conversas salvas recarrega. */
+  archiveVersion: number;
 }
+
+/** O que o painel mostra: o chat da sala, a lista de conversas salvas, ou uma delas. */
+type View = { kind: "chat" } | { kind: "archives" } | { kind: "archive"; summary: ChatArchiveSummary };
 
 /**
  * O chat é um livro de ocorrências, não uma pilha de balões.
@@ -71,7 +95,14 @@ export function ChatSidebar({
   onDraftChange: setDraft,
   onDelete,
   loadFile,
+  onArchive,
+  listArchives,
+  openArchive,
+  archiveVersion,
 }: ChatSidebarProps) {
+  const [view, setView] = useState<View>({ kind: "chat" });
+  const [confirmArchive, setConfirmArchive] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [pending, setPending] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -120,6 +151,20 @@ export function ChatSidebar({
   }, []);
 
   if (!isOpen) return null;
+
+  async function handleArchive() {
+    setArchiving(true);
+    setSendError(null);
+    try {
+      await onArchive();
+      setConfirmArchive(false);
+    } catch (error) {
+      setSendError(error instanceof Error && error.message ? error.message : "Não foi possível arquivar a conversa.");
+      setConfirmArchive(false);
+    } finally {
+      setArchiving(false);
+    }
+  }
 
   async function handleDelete(id: string) {
     if (confirmDelete !== id) {
@@ -189,6 +234,32 @@ export function ChatSidebar({
     });
   }
 
+  if (view.kind !== "chat") {
+    return (
+      <aside className="relative flex h-full w-full min-h-0 flex-col bg-sheet">
+        {view.kind === "archives" ? (
+          <ArchiveList
+            listArchives={listArchives}
+            version={archiveVersion}
+            onBack={() => setView({ kind: "chat" })}
+            onClose={onClose}
+            onOpen={(summary) => setView({ kind: "archive", summary })}
+          />
+        ) : (
+          <ArchiveReader
+            summary={view.summary}
+            openArchive={openArchive}
+            loadFile={loadFile}
+            onBack={() => setView({ kind: "archives" })}
+            onClose={onClose}
+            onOpenImage={(url, name) => setViewer({ url, name })}
+          />
+        )}
+        {viewer ? <ImageViewer url={viewer.url} name={viewer.name} onClose={() => setViewer(null)} /> : null}
+      </aside>
+    );
+  }
+
   return (
     <aside
       className="relative flex h-full w-full min-h-0 flex-col bg-sheet"
@@ -221,15 +292,55 @@ export function ChatSidebar({
             {chatMessages.length}
           </span>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Fechar bate-papo"
-          className="shrink-0 border border-transparent px-1.5 py-1 text-ink-3 transition-colors hover:border-rule hover:bg-sheet hover:text-ink [border-radius:var(--radius-cell)]"
-        >
-          <X size={15} strokeWidth={1.5} aria-hidden />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <HeaderButton label="Conversas salvas" onClick={() => setView({ kind: "archives" })}>
+            <History size={15} strokeWidth={1.5} aria-hidden />
+          </HeaderButton>
+          <HeaderButton
+            label="Arquivar a conversa e começar um chat novo"
+            pressed={confirmArchive}
+            disabled={chatMessages.length === 0 || archiving}
+            onClick={() => setConfirmArchive((c) => !c)}
+          >
+            <Archive size={15} strokeWidth={1.5} aria-hidden />
+          </HeaderButton>
+          <HeaderButton label="Fechar bate-papo" onClick={onClose}>
+            <X size={15} strokeWidth={1.5} aria-hidden />
+          </HeaderButton>
+        </div>
       </div>
+
+      {confirmArchive ? (
+        <div role="alertdialog" aria-label="Arquivar a conversa" className="border-b border-rule bg-band px-4 py-3">
+          <p className="text-[0.8125rem] leading-[1.45] text-ink-2">
+            A conversa ({plural(chatMessages.length, "mensagem", "mensagens")}, com imagens e arquivos) vai para{" "}
+            <span className="font-semibold text-ink">Conversas salvas</span>, e o chat recomeça vazio para todos na sala.
+          </p>
+          <div className="mt-2.5 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleArchive()}
+              disabled={archiving}
+              className="inline-flex items-center gap-1.5 border border-signal bg-signal px-3 py-1.5 text-[0.8125rem] font-semibold text-on-signal transition-colors hover:bg-signal-2 disabled:opacity-60 [border-radius:var(--radius-cell)]"
+            >
+              {archiving ? (
+                <LoaderCircle size={14} strokeWidth={2} aria-hidden className="animate-spin" />
+              ) : (
+                <Archive size={14} strokeWidth={1.75} aria-hidden />
+              )}
+              {archiving ? "Arquivando…" : "Arquivar e começar de novo"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmArchive(false)}
+              disabled={archiving}
+              className="px-2 py-1.5 text-[0.8125rem] font-medium text-ink-3 transition-colors hover:text-ink disabled:opacity-60"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex-1 overflow-y-auto">
         {chatMessages.length === 0 ? (
@@ -240,72 +351,12 @@ export function ChatSidebar({
             </p>
           </div>
         ) : (
-          <ul aria-label="Mensagens">
-            {chatMessages.map((msg, index) => {
-              // `isLocal` vem do SDK (ao vivo) ou da identidade (histórico).
-              // Comparar apelidos rotularia como suas as mensagens de outra
-              // pessoa sempre que os nomes coincidissem.
-              const isMe = msg.isLocal;
-              const prev = chatMessages[index - 1];
-              const grouped =
-                prev !== undefined &&
-                prev.fromIdentity === msg.fromIdentity &&
-                msg.timestamp - prev.timestamp < GROUP_MS;
-              const files = msg.files;
-              const autoCaption = msg.attributes[AUTO_CAPTION_ATTR] === "1" && files.length > 0;
-              const asking = confirmDelete === msg.id;
-              return (
-                <li
-                  key={msg.id || msg.timestamp}
-                  className={cn(
-                    "group/msg relative px-4",
-                    grouped ? "pt-0.5 pb-1.5" : "border-t border-rule pt-3 pb-1.5 first:border-t-0",
-                    isMe && "border-l-2 border-l-signal-line",
-                  )}
-                >
-                  {grouped ? null : (
-                    <div className="flex items-baseline gap-2">
-                      <span className="truncate text-[0.8125rem] font-medium text-ink">
-                        {isMe ? "Você" : msg.fromName || "Participante"}
-                      </span>
-                      <span className="ml-auto shrink-0 font-mono text-[0.6875rem] text-ink-3">
-                        {formatTime(msg.timestamp)}
-                      </span>
-                    </div>
-                  )}
-                  {autoCaption || !msg.message ? null : (
-                    <MessageText text={msg.message} muted={!isMe} timestamp={grouped ? msg.timestamp : null} />
-                  )}
-                  {files.length > 0 ? (
-                    <Attachments files={files} loadFile={loadFile} onOpenImage={(url, name) => setViewer({ url, name })} />
-                  ) : null}
-                  {isMe && msg.id ? (
-                    <button
-                      type="button"
-                      onClick={() => void handleDelete(msg.id)}
-                      disabled={deleting === msg.id}
-                      aria-label={asking ? "Confirmar: apagar mensagem para todos" : "Apagar mensagem"}
-                      title={asking ? "Clique de novo para apagar para todos" : "Apagar mensagem"}
-                      className={cn(
-                        "absolute right-2 inline-flex items-center gap-1 border px-1.5 py-0.5 text-[0.6875rem] font-semibold transition-[opacity,color,background-color] [border-radius:var(--radius-cell)]",
-                        grouped ? "top-0" : "top-2.5",
-                        asking || deleting === msg.id
-                          ? "border-alert-line bg-alert-wash text-alert opacity-100"
-                          : "border-rule bg-sheet text-ink-3 opacity-0 hover:text-alert focus-visible:opacity-100 group-hover/msg:opacity-100",
-                      )}
-                    >
-                      {deleting === msg.id ? (
-                        <LoaderCircle size={12} strokeWidth={2} aria-hidden className="animate-spin" />
-                      ) : (
-                        <Trash2 size={12} strokeWidth={1.75} aria-hidden />
-                      )}
-                      {asking ? "Apagar?" : null}
-                    </button>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
+          <MessageList
+            entries={chatMessages}
+            loadFile={loadFile}
+            onOpenImage={(url, name) => setViewer({ url, name })}
+            deletion={{ confirmId: confirmDelete, deletingId: deleting, onDelete: (id) => void handleDelete(id) }}
+          />
         )}
         <div ref={messagesEndRef} />
       </div>
@@ -407,6 +458,297 @@ export function ChatSidebar({
       {viewer ? <ImageViewer url={viewer.url} name={viewer.name} onClose={() => setViewer(null)} /> : null}
     </aside>
   );
+}
+
+/**
+ * As mensagens em linhas pautadas. No chat da sala, quem mandou pode apagar a
+ * própria (`deletion`); numa conversa salva, é só leitura.
+ */
+function MessageList({
+  entries,
+  loadFile,
+  onOpenImage,
+  deletion,
+}: {
+  entries: ChatEntry[];
+  loadFile: LoadFile;
+  onOpenImage: (url: string, name: string) => void;
+  deletion?: { confirmId: string | null; deletingId: string | null; onDelete: (id: string) => void };
+}) {
+  return (
+    <ul aria-label="Mensagens">
+      {entries.map((msg, index) => {
+        // `isLocal` vem do SDK (ao vivo) ou da identidade (histórico).
+        // Comparar apelidos rotularia como suas as mensagens de outra
+        // pessoa sempre que os nomes coincidissem.
+        const isMe = msg.isLocal;
+        const prev = entries[index - 1];
+        const grouped =
+          prev !== undefined && prev.fromIdentity === msg.fromIdentity && msg.timestamp - prev.timestamp < GROUP_MS;
+        const files = msg.files;
+        const autoCaption = msg.attributes[AUTO_CAPTION_ATTR] === "1" && files.length > 0;
+        const asking = deletion?.confirmId === msg.id;
+        const deleting = deletion?.deletingId === msg.id;
+        // Numa conversa salva, um dia diferente do anterior ganha a data no cabeçalho.
+        const newDay = !prev || new Date(prev.timestamp).toDateString() !== new Date(msg.timestamp).toDateString();
+        return (
+          <li
+            key={msg.id || msg.timestamp}
+            className={cn(
+              "group/msg relative px-4",
+              grouped ? "pt-0.5 pb-1.5" : "border-t border-rule pt-3 pb-1.5 first:border-t-0",
+              isMe && "border-l-2 border-l-signal-line",
+            )}
+          >
+            {grouped ? null : (
+              <div className="flex items-baseline gap-2">
+                <span className="truncate text-[0.8125rem] font-medium text-ink">
+                  {isMe ? "Você" : msg.fromName || "Participante"}
+                </span>
+                <span className="ml-auto shrink-0 font-mono text-[0.6875rem] text-ink-3">
+                  {deletion || !newDay ? formatTime(msg.timestamp) : formatDateTime(msg.timestamp)}
+                </span>
+              </div>
+            )}
+            {autoCaption || !msg.message ? null : (
+              <MessageText text={msg.message} muted={!isMe} timestamp={grouped ? msg.timestamp : null} />
+            )}
+            {files.length > 0 ? <Attachments files={files} loadFile={loadFile} onOpenImage={onOpenImage} /> : null}
+            {deletion && isMe && msg.id ? (
+              <button
+                type="button"
+                onClick={() => deletion.onDelete(msg.id)}
+                disabled={deleting}
+                aria-label={asking ? "Confirmar: apagar mensagem para todos" : "Apagar mensagem"}
+                title={asking ? "Clique de novo para apagar para todos" : "Apagar mensagem"}
+                className={cn(
+                  "absolute right-2 inline-flex items-center gap-1 border px-1.5 py-0.5 text-[0.6875rem] font-semibold transition-[opacity,color,background-color] [border-radius:var(--radius-cell)]",
+                  grouped ? "top-0" : "top-2.5",
+                  asking || deleting
+                    ? "border-alert-line bg-alert-wash text-alert opacity-100"
+                    : "border-rule bg-sheet text-ink-3 opacity-0 hover:text-alert focus-visible:opacity-100 group-hover/msg:opacity-100",
+                )}
+              >
+                {deleting ? (
+                  <LoaderCircle size={12} strokeWidth={2} aria-hidden className="animate-spin" />
+                ) : (
+                  <Trash2 size={12} strokeWidth={1.75} aria-hidden />
+                )}
+                {asking ? "Apagar?" : null}
+              </button>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function HeaderButton({
+  children,
+  label,
+  onClick,
+  pressed,
+  disabled,
+}: {
+  children: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  pressed?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      aria-pressed={pressed}
+      title={label}
+      disabled={disabled}
+      className={cn(
+        "shrink-0 border border-transparent px-1.5 py-1 text-ink-3 transition-colors hover:border-rule hover:bg-sheet hover:text-ink disabled:pointer-events-none disabled:opacity-40 [border-radius:var(--radius-cell)]",
+        pressed && "border-rule bg-sheet text-ink",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SubHeader({
+  title,
+  subtitle,
+  backLabel,
+  onBack,
+  onClose,
+}: {
+  title: string;
+  subtitle?: string;
+  backLabel: string;
+  onBack: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 border-b border-rule bg-band px-2 py-2">
+      <HeaderButton label={backLabel} onClick={onBack}>
+        <ArrowLeft size={15} strokeWidth={1.5} aria-hidden />
+      </HeaderButton>
+      <div className="min-w-0 flex-1">
+        <h2 className="truncate text-[0.875rem] font-semibold text-ink">{title}</h2>
+        {subtitle ? <p className="truncate text-[0.75rem] text-ink-3">{subtitle}</p> : null}
+      </div>
+      <HeaderButton label="Fechar bate-papo" onClick={onClose}>
+        <X size={15} strokeWidth={1.5} aria-hidden />
+      </HeaderButton>
+    </div>
+  );
+}
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** As conversas arquivadas da sala, da mais nova para a mais antiga. */
+function ArchiveList({
+  listArchives,
+  version,
+  onBack,
+  onClose,
+  onOpen,
+}: {
+  listArchives: () => Promise<ChatArchiveSummary[]>;
+  version: number;
+  onBack: () => void;
+  onClose: () => void;
+  onOpen: (summary: ChatArchiveSummary) => void;
+}) {
+  const [list, setList] = useState<ChatArchiveSummary[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setError(null);
+    listArchives().then(
+      (l) => alive && setList(l),
+      (e) => alive && setError(e instanceof Error && e.message ? e.message : "Não foi possível carregar as conversas salvas."),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [listArchives, version]);
+
+  return (
+    <>
+      <SubHeader title="Conversas salvas" backLabel="Voltar ao chat" onBack={onBack} onClose={onClose} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {error ? (
+          <p className="px-4 py-6 text-center text-[0.8125rem] text-warn">{error}</p>
+        ) : list === null ? (
+          <p className="px-4 py-6 text-center text-[0.8125rem] text-ink-3">Carregando…</p>
+        ) : list.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-6 py-12 text-center">
+            <p className="text-[0.875rem] font-medium text-ink-2">Nenhuma conversa salva ainda</p>
+            <p className="text-[0.8125rem] text-ink-3">
+              No chat, o botão de arquivar guarda a conversa aqui, com imagens e arquivos, e começa um chat novo.
+            </p>
+          </div>
+        ) : (
+          <ul aria-label="Conversas salvas">
+            {list.map((a) => (
+              <li key={a.id} className="border-b border-rule last:border-b-0">
+                <button
+                  type="button"
+                  onClick={() => onOpen(a)}
+                  className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-band"
+                >
+                  <Archive size={16} strokeWidth={1.5} aria-hidden className="mt-0.5 shrink-0 text-ink-3" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[0.875rem] font-medium text-ink">{formatRange(a.firstAt, a.lastAt)}</span>
+                    <span className="block text-[0.75rem] text-ink-3">
+                      {plural(a.messageCount, "mensagem", "mensagens")}
+                      {a.fileCount > 0 ? ` · ${plural(a.fileCount, "arquivo", "arquivos")}` : ""}
+                    </span>
+                    <span className="block truncate text-[0.75rem] text-ink-3">
+                      Arquivada {a.archivedByName ? `por ${a.archivedByName} ` : ""}em {formatDateTime(a.createdAt)}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </>
+  );
+}
+
+/** Uma conversa salva, só para ler (e abrir ou salvar os anexos). */
+function ArchiveReader({
+  summary,
+  openArchive,
+  loadFile,
+  onBack,
+  onClose,
+  onOpenImage,
+}: {
+  summary: ChatArchiveSummary;
+  openArchive: (id: string) => Promise<ChatEntry[]>;
+  loadFile: LoadFile;
+  onBack: () => void;
+  onClose: () => void;
+  onOpenImage: (url: string, name: string) => void;
+}) {
+  const [entries, setEntries] = useState<ChatEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    openArchive(summary.id).then(
+      (e) => alive && setEntries(e),
+      (e) => alive && setError(e instanceof Error && e.message ? e.message : "Não foi possível abrir a conversa salva."),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [openArchive, summary.id]);
+
+  return (
+    <>
+      <SubHeader
+        title={formatRange(summary.firstAt, summary.lastAt)}
+        subtitle={`Conversa salva · ${plural(summary.messageCount, "mensagem", "mensagens")}`}
+        backLabel="Voltar às conversas salvas"
+        onBack={onBack}
+        onClose={onClose}
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {error ? (
+          <p className="px-4 py-6 text-center text-[0.8125rem] text-warn">{error}</p>
+        ) : entries === null ? (
+          <p className="px-4 py-6 text-center text-[0.8125rem] text-ink-3">Carregando…</p>
+        ) : (
+          <MessageList entries={entries} loadFile={loadFile} onOpenImage={onOpenImage} />
+        )}
+      </div>
+    </>
+  );
+}
+
+function formatDateTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** "21/11/26, 13:40 – 15:02", ou com as duas datas quando a conversa virou o dia. */
+function formatRange(from: number, to: number): string {
+  if (!from) return formatDateTime(to);
+  const sameDay = new Date(from).toDateString() === new Date(to).toDateString();
+  return `${formatDateTime(from)} – ${sameDay ? formatTime(to) : formatDateTime(to)}`;
 }
 
 function formatTime(timestamp: number): string {

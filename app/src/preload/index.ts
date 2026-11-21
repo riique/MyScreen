@@ -47,6 +47,10 @@ const bridge: DesktopBridge = {
     chatAppend: (roomId, roomToken, msg) => ipcRenderer.invoke("api:chatAppend", roomId, roomToken, msg),
     chatDelete: (roomId, roomToken, messageId) => ipcRenderer.invoke("api:chatDelete", roomId, roomToken, messageId),
     chatFile: (roomId, roomToken, fileId) => ipcRenderer.invoke("api:chatFile", roomId, roomToken, fileId),
+    chatArchive: (roomId, roomToken) => ipcRenderer.invoke("api:chatArchive", roomId, roomToken),
+    chatArchives: (roomId, roomToken) => ipcRenderer.invoke("api:chatArchives", roomId, roomToken),
+    chatArchiveMessages: (roomId, roomToken, archiveId) =>
+      ipcRenderer.invoke("api:chatArchiveMessages", roomId, roomToken, archiveId),
   },
   capture: {
     list: () => ipcRenderer.invoke("capture:list"),
