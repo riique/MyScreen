@@ -4,6 +4,7 @@ import type { RemoteCapabilities, RemoteConsentRequest, RemoteSessionInfo } from
 import {
   ATTR_BY,
   ATTR_DISPLAY,
+  ATTR_UNATTENDED,
   ATTR_VERSION,
   CLIP_ATTR,
   MAX_CLIP_FILES,
@@ -57,6 +58,7 @@ export function useRemoteControlHost({
   room,
   share,
   disabled,
+  unattendedEnabled,
   myName,
   sendChat,
 }: {
@@ -64,6 +66,8 @@ export function useRemoteControlHost({
   share: HostShare | null;
   /** "Nunca aceitar pedidos de controle". */
   disabled: boolean;
+  /** Há senha de acesso direto (admin) configurada neste PC. */
+  unattendedEnabled: boolean;
   myName: string;
   sendChat: (text: string) => Promise<unknown>;
 }): RemoteHost {
@@ -93,14 +97,18 @@ export function useRemoteControlHost({
   useEffect(() => {
     if (!advertise && !advertised.current) return;
     const attrs: Record<string, string> = advertise
-      ? { [ATTR_VERSION]: String(RC_VERSION), [ATTR_DISPLAY]: display }
-      : { [ATTR_VERSION]: "", [ATTR_DISPLAY]: "", [ATTR_BY]: "" };
+      ? {
+          [ATTR_VERSION]: String(RC_VERSION),
+          [ATTR_DISPLAY]: display,
+          [ATTR_UNATTENDED]: unattendedEnabled ? "1" : "",
+        }
+      : { [ATTR_VERSION]: "", [ATTR_DISPLAY]: "", [ATTR_UNATTENDED]: "", [ATTR_BY]: "" };
     advertised.current = advertise;
     room.localParticipant.setAttributes(attrs).catch((error: unknown) => {
       // Servidor sem `canUpdateOwnMetadata` no token: o recurso só não aparece.
       console.warn("Não foi possível anunciar o controle remoto:", error);
     });
-  }, [room, advertise, display]);
+  }, [room, advertise, display, unattendedEnabled]);
 
   // --- Rede → processo principal.
   useEffect(() => {
@@ -225,7 +233,12 @@ export function useRemoteControlHost({
       setSession(next);
       const { sendChat: chat, myName: me } = chatRef.current;
       // Transparência para a sala inteira: uma linha no chat quando começa e quando acaba.
-      if (next && !prev) void chat(`🖱 ${next.name} começou a controlar a tela de ${me}.`).catch(() => {});
+      if (next && !prev) {
+        const line = next.direct
+          ? `🖱 ${next.name} assumiu o controle da tela de ${me} (acesso direto).`
+          : `🖱 ${next.name} começou a controlar a tela de ${me}.`;
+        void chat(line).catch(() => {});
+      }
       if (!next && ended) void chat(`🖱 ${ended.name} ${END_TEXT[ended.reason] ?? "parou de controlar"}.`).catch(() => {});
       room.localParticipant
         .setAttributes({ [ATTR_BY]: next ? next.identity : "" })

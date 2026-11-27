@@ -72,6 +72,8 @@ export interface AppSettings {
   autoDownloadUpdates: boolean;
   /** "Nunca aceitar pedidos de controle": o app nem anuncia que pode ser controlado. */
   remoteControlDisabled: boolean;
+  /** Há senha de acesso direto (admin) configurada neste PC (nunca expõe o segredo). */
+  unattendedAccessEnabled: boolean;
   /** Mostra, na chamada, o botão que toca os áudios do servidor para a sala. */
   soundboardEnabled: boolean;
   /** Últimos estados de microfone e câmera, aparelhos e aprimoramentos. */
@@ -193,6 +195,8 @@ export interface RemoteSessionInfo {
   name: string;
   paused: boolean;
   elevated: boolean;
+  /** True quando a sessão começou por acesso direto (senha de admin), sem clique em "Permitir". */
+  direct: boolean;
 }
 
 /** Mudança de sessão do lado controlado: começo, pausa, ou fim (com motivo). */
@@ -221,6 +225,8 @@ export interface DesktopBridge {
   settings: {
     get(): Promise<AppSettings>;
     set(patch: AppSettingsPatch): Promise<ApiResult<AppSettings>>;
+    /** Define/troca a senha de acesso direto (admin) deste PC, ou `null` para desativar. */
+    setUnattendedPassword(password: string | null): Promise<ApiResult<AppSettings>>;
   };
   api: {
     createRoom(input: { title: string; password?: string }): Promise<ApiResult<RoomInfo>>;

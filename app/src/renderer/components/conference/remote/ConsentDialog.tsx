@@ -62,8 +62,7 @@ export function ConsentDialog({
             tela.
           </p>
           <p className="text-[0.8125rem] text-ink-3">
-            Janelas do MyScreen não recebem cliques nem teclas de {name}. Janelas de administrador, a tela de bloqueio e o
-            Ctrl+Alt+Del ficam fora do alcance.
+            Janelas de administrador, a tela de bloqueio e o Ctrl+Alt+Del ficam fora do alcance.
           </p>
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-rule px-6 py-3.5">

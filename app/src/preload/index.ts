@@ -31,6 +31,7 @@ const bridge: DesktopBridge = {
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     set: (patch) => ipcRenderer.invoke("settings:set", patch),
+    setUnattendedPassword: (password) => ipcRenderer.invoke("settings:setUnattendedPassword", password),
   },
   api: {
     createRoom: (input) => ipcRenderer.invoke("api:createRoom", input),

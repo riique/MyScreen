@@ -35,8 +35,13 @@ import {
   token,
   uploadSound,
 } from "./server";
-import { getSettings, updateSettings } from "./settings";
+import { getSettings, setUnattendedCredential, updateSettings } from "./settings";
 import { parseMediaPrefs } from "../shared/media";
+import {
+  UNATTENDED_PASSWORD_MAX,
+  UNATTENDED_PASSWORD_MIN,
+  createUnattendedCredential,
+} from "../shared/remote/unattendedAuth";
 import { applyAutoDownload, checkForUpdates, configureFeed, downloadUpdate, installUpdate, updateStatus } from "./updater";
 import { applyTheme, getMainWindow, openChatLink, openExternalSafely, setSharing } from "./windows";
 import { normalizeRoomId } from "../shared/room";
@@ -157,6 +162,32 @@ export function registerIpc(): void {
     if (next.serverUrl && app.isPackaged) configureFeed();
     if (next.autoDownloadUpdates !== undefined) applyAutoDownload();
     return { ok: true, data: saved };
+  });
+  handle("settings:setUnattendedPassword", async (_e, raw) => {
+    if (raw === null) {
+      return { ok: true, data: setUnattendedCredential(null) };
+    }
+    if (typeof raw !== "string") throw new TypeError("password: esperado string ou null");
+    if (raw.length < UNATTENDED_PASSWORD_MIN || raw.trim().length === 0) {
+      return {
+        ok: false,
+        error: `Use pelo menos ${UNATTENDED_PASSWORD_MIN} caracteres para a senha de acesso direto.`,
+        field: "unattendedPassword",
+        status: 400,
+        retryAfter: null,
+      };
+    }
+    if (raw.length > UNATTENDED_PASSWORD_MAX) {
+      return {
+        ok: false,
+        error: `A senha pode ter no máximo ${UNATTENDED_PASSWORD_MAX} caracteres.`,
+        field: "unattendedPassword",
+        status: 400,
+        retryAfter: null,
+      };
+    }
+    const cred = await createUnattendedCredential(raw);
+    return { ok: true, data: setUnattendedCredential(cred) };
   });
 
   // --- API do servidor

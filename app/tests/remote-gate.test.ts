@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { RemoteGate, type GateDeps, type HostShare, type InjectCommand } from "../src/main/remoteGate";
+import { RemoteGate, type GateDeps, type HostShare, type InjectCommand, type UnattendedVerifier } from "../src/main/remoteGate";
 import type { Rect } from "@shared/remote/geometry";
 
 import {
@@ -29,8 +29,10 @@ function setup() {
   const world = {
     share: { kind: "screen", sourceName: "Monitor 1", trackSid: "TR_screen", physical: display } as HostShare | null,
     disabled: false,
-    appFocused: false,
+    unattended: null as UnattendedVerifier | null,
   };
+  let nextId = 0;
+  const ids = [SESSION, "ICEiIyQlJicoKSorLC0uLw", "MDEyMzQ1Njc4OUFCQ0RFRg"];
   const deps: GateDeps = {
     now: () => now,
     setTimer: (fn, ms) => {
@@ -38,10 +40,10 @@ function setup() {
       return timerId;
     },
     clearTimer: (h) => timers.delete(h as number),
-    randomId: () => SESSION,
+    randomId: () => ids[nextId++ % ids.length],
     share: () => world.share,
     acceptsRequests: () => (world.disabled ? { ok: false, reason: "disabled" } : { ok: true }),
-    appFocused: () => world.appFocused,
+    unattendedAuth: () => world.unattended,
     send: (to, msg) => sent.push({ to, msg }),
     inject: (cmd) => {
       injected.push(cmd);
@@ -92,12 +94,11 @@ describe("consentimento", () => {
     t.gate.peerSeen(ana.identity, "PA_ana2");
     expect(t.gate.canUseAdmin(ana, SESSION)).toBe(false);
   });
-  it("quem permitiu com o MyScreen na frente recebe o aviso junto com o grant", () => {
+  it("pedido normal cria sessão não-direta sem bloquear foco no MyScreen", () => {
     const u = setup();
-    u.world.appFocused = true;
     u.grant();
-    expect(u.sent.map((m) => m.msg.t)).toEqual(["grant", "state"]);
-    expect(u.sent.at(-1)?.msg).toMatchObject({ why: "protected" });
+    expect(u.sent.map((m) => m.msg.t)).toEqual(["grant"]);
+    expect(u.gate.active?.direct).toBe(false);
   });
   it("pedido abre o diálogo; sem clique não há sessão", () => {
     t.gate.handleCtl(ana, { t: "request", v: 1, reqId: REQ });
@@ -184,17 +185,13 @@ describe("portão de input", () => {
     expect(t.input({ t: "button", button: 0, down: false, x: 0, y: 0 })).toBe(true);
     expect(t.input({ t: "button", button: 2, down: false, x: 65535, y: 65535 })).toBe(false);
   });
-  it("MyScreen em primeiro plano: avisa o controlador e volta a avisar quando sai", () => {
-    t.gate.setAppFocused(true);
-    expect(t.sent.at(-1)?.msg).toEqual({ t: "state", sessionId: SESSION, paused: true, why: "protected" });
-    expect(t.input({ t: "move", x: 1, y: 1 })).toBe(true);
-    t.gate.setAppFocused(false);
-    expect(t.sent.at(-1)?.msg).toEqual({ t: "state", sessionId: SESSION, paused: false });
-  });
-  it("teclas não entram com o MyScreen em primeiro plano", () => {
-    t.world.appFocused = true;
-    expect(t.input({ t: "key", scancode: 0x1e, down: true })).toBe(false);
-    expect(t.input({ t: "text", text: "senha" })).toBe(false);
+  it("teclas e texto entram normalmente (inclusive sobre o MyScreen)", () => {
+    expect(t.input({ t: "key", scancode: 0x1e, down: true })).toBe(true);
+    expect(t.input({ t: "text", text: "ok" })).toBe(true);
+    expect(t.injected.slice(-2)).toEqual([
+      { t: "key", scancode: 0x1e, down: true },
+      { t: "text", text: "ok" },
+    ]);
   });
   it("estouro do balde: descarta movimento; em evento confiável, revoga", () => {
     let moves = 0;
@@ -337,5 +334,108 @@ describe("imagem e arquivos na área de transferência", () => {
     const before = t.sent.length;
     t.gate.clipResult(REQ, CLIP, true);
     expect(t.sent).toHaveLength(before);
+  });
+});
+
+describe("acesso direto (admin)", () => {
+  const SALT = "MDEyMzQ1Njc4OUFCQ0RFRg";
+  const GOOD_PROOF = "A".repeat(43);
+  const BAD_PROOF = "B".repeat(43);
+
+  function enableUnattended() {
+    let lastNonce = "";
+    t.world.unattended = {
+      salt: SALT,
+      verify: (reqId, nonce, proof) => {
+        lastNonce = nonce;
+        return reqId === REQ && proof === GOOD_PROOF;
+      },
+    };
+    return () => lastNonce;
+  }
+
+  it("sem senha configurada recusa com auth-unavailable", () => {
+    t.gate.handleCtl(ana, { t: "auth-request", v: 1, reqId: REQ });
+    expect(t.sent.at(-1)).toEqual({ to: ana.identity, msg: { t: "deny", reqId: REQ, reason: "auth-unavailable" } });
+    expect(t.consents).toEqual([]);
+  });
+
+  it("com 'Nunca aceitar pedidos de controle' ligado recusa com disabled mesmo com senha configurada", () => {
+    enableUnattended();
+    t.world.disabled = true;
+    t.gate.handleCtl(ana, { t: "auth-request", v: 1, reqId: REQ });
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "deny", reqId: REQ, reason: "disabled" });
+  });
+
+  it("desafio-resposta válido concede sessão direta sem abrir diálogo de consentimento", () => {
+    const getNonce = enableUnattended();
+    t.gate.handleCtl(ana, { t: "auth-request", v: 1, reqId: REQ });
+    expect(t.consents).toEqual([]);
+    const challenge = t.sent.at(-1)?.msg;
+    expect(challenge).toMatchObject({ t: "auth-challenge", reqId: REQ, salt: SALT });
+    expect(t.gate.active).toBeNull();
+
+    t.gate.handleCtl(ana, { t: "auth-response", reqId: REQ, proof: GOOD_PROOF });
+    expect(getNonce()).toBe((challenge as Extract<Ctl, { t: "auth-challenge" }>).nonce);
+    expect(t.sent.at(-1)?.msg).toMatchObject({ t: "grant", reqId: REQ, trackSid: "TR_screen", width: 1920, height: 1080 });
+    expect(t.gate.active).toEqual({
+      identity: ana.identity,
+      name: ana.name,
+      paused: false,
+      elevated: false,
+      direct: true,
+    });
+    expect(t.consents).toEqual([]);
+  });
+
+  it("senha errada recusa com bad-password, aplica espera progressiva e impede replay", () => {
+    enableUnattended();
+    t.gate.handleCtl(ana, { t: "auth-request", v: 1, reqId: REQ });
+    t.gate.handleCtl(ana, { t: "auth-response", reqId: REQ, proof: BAD_PROOF });
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "deny", reqId: REQ, reason: "bad-password" });
+    expect(t.gate.active).toBeNull();
+
+    // Reenviar a resposta para o mesmo desafio já consumido é ignorado.
+    const before = t.sent.length;
+    t.gate.handleCtl(ana, { t: "auth-response", reqId: REQ, proof: GOOD_PROOF });
+    expect(t.sent.length).toBe(before);
+    expect(t.gate.active).toBeNull();
+
+    // Durante a espera (1.5 s após 1ª falha), novo pedido cai em cooldown.
+    t.gate.handleCtl(ana, { t: "auth-request", v: 1, reqId: SESSION });
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "deny", reqId: SESSION, reason: "cooldown" });
+
+    // Depois da espera, pode tentar de novo e entrar com a prova certa.
+    t.advance(1_500);
+    t.gate.handleCtl(ana, { t: "auth-request", v: 1, reqId: REQ });
+    expect(t.sent.at(-1)?.msg).toMatchObject({ t: "auth-challenge", reqId: REQ });
+    t.gate.handleCtl(ana, { t: "auth-response", reqId: REQ, proof: GOOD_PROOF });
+    expect(t.gate.active?.direct).toBe(true);
+  });
+
+  it("desafio é preso ao SID e expira em 15 s", () => {
+    enableUnattended();
+    t.gate.handleCtl(ana, { t: "auth-request", v: 1, reqId: REQ });
+    // Outro SID não pode responder ao desafio da Ana.
+    t.gate.handleCtl({ ...ana, sid: "PA_outro" }, { t: "auth-response", reqId: REQ, proof: GOOD_PROOF });
+    expect(t.gate.active).toBeNull();
+
+    t.advance(15_000);
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "deny", reqId: REQ, reason: "timeout" });
+    t.gate.handleCtl(ana, { t: "auth-response", reqId: REQ, proof: GOOD_PROOF });
+    expect(t.gate.active).toBeNull();
+  });
+
+  it("cancelar ou parar compartilhamento encerra o desafio pendente", () => {
+    enableUnattended();
+    t.gate.handleCtl(ana, { t: "auth-request", v: 1, reqId: REQ });
+    t.gate.handleCtl(ana, { t: "cancel", reqId: REQ });
+    t.gate.handleCtl(ana, { t: "auth-response", reqId: REQ, proof: GOOD_PROOF });
+    expect(t.gate.active).toBeNull();
+
+    t.gate.handleCtl(ana, { t: "auth-request", v: 1, reqId: REQ });
+    t.world.share = null;
+    t.gate.shareChanged();
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "deny", reqId: REQ, reason: "not-sharing" });
   });
 });

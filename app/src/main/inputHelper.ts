@@ -53,7 +53,7 @@ export function runInputHelper(pipe: string, parentPid: number): void {
       } catch {
         return;
       }
-      if (cmd && typeof cmd === "object" && typeof cmd.t === "string") inject(injector, parentPid, cmd);
+      if (cmd && typeof cmd === "object" && typeof cmd.t === "string") inject(injector, 0, cmd);
     });
   } catch (error) {
     console.error("Auxiliar elevado do controle remoto:", error);

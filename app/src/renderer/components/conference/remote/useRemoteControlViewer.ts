@@ -2,6 +2,7 @@ import { RoomEvent, type Participant, type RemoteParticipant, type Room } from "
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RichClipboard } from "@shared/ipc";
 import {
+  AUTH_TIMEOUT_MS,
   CLIP_ATTR,
   CONSENT_TIMEOUT_MS,
   MAX_UAC_FRAME_BYTES,
@@ -23,17 +24,19 @@ import {
   type PauseWhy,
   type RevokeReason,
 } from "@shared/remote/protocol";
+import { proveUnattendedChallenge } from "@shared/remote/unattendedAuth";
 import { createUacKeyPair, decryptUacFrame, deriveUacKey } from "./uacVideoCrypto";
 
 /**
- * Lado de quem controla: pede, espera a permissão, manda o input e mede a
- * latência. Um controle por vez. Nada aqui tem poder no PC remoto — quem
- * decide é o processo principal de lá.
+ * Lado de quem controla: pede, espera a permissão (ou autentica por senha de
+ * acesso direto), manda o input e mede a latência. Um controle por vez. Nada
+ * aqui tem poder no PC remoto — quem decide é o processo principal de lá.
  */
 
 export type ViewerState =
   | { phase: "idle" }
   | { phase: "requesting"; target: string; targetSid: string; targetName: string; reqId: string }
+  | { phase: "authenticating"; target: string; targetSid: string; targetName: string; reqId: string }
   | {
       phase: "active";
       target: string;
@@ -69,7 +72,11 @@ export interface RemoteViewer {
   sendClip(clip: RichClipboard): Promise<void>;
   notice: string | null;
   dismissNotice(): void;
+  /** Erro da última tentativa de acesso direto (exibido dentro do diálogo de senha). */
+  authError: string | null;
+  dismissAuthError(): void;
   request(participant: Participant): void;
+  requestDirect(participant: Participant, password: string): void;
   cancel(): void;
   stop(): void;
   send(ev: InputEvent): void;
@@ -97,6 +104,10 @@ function denyText(name: string, reason: DenyReason): string {
       return `${name} não está compartilhando uma tela inteira pelo app.`;
     case "cooldown":
       return `Espere alguns segundos antes de pedir de novo a ${name}.`;
+    case "bad-password":
+      return "Senha de acesso incorreta.";
+    case "auth-unavailable":
+      return `${name} não tem acesso direto configurado neste computador.`;
   }
 }
 
@@ -122,6 +133,8 @@ function revokeText(name: string, reason: RevokeReason): string {
 export function useRemoteControlViewer(room: Room): RemoteViewer {
   const [state, setState] = useState<ViewerState>({ phase: "idle" });
   const [notice, setNotice] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const pendingAuthRef = useRef<{ reqId: string; password: string } | null>(null);
   const stateRef = useRef(state);
   const adminKey = useRef<{ sessionId: string; privateKey?: CryptoKey } | null>(null);
   const adminFeed = useRef<{
@@ -227,22 +240,39 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
       const reqId = randomId();
       const name = participant.name || participant.identity;
       setNotice(null);
+      setAuthError(null);
+      pendingAuthRef.current = null;
       setState({ phase: "requesting", target: participant.identity, targetSid: participant.sid, targetName: name, reqId });
       sendCtl(participant.identity, { t: "request", v: RC_VERSION, reqId });
     },
     [sendCtl],
   );
 
+  const requestDirect = useCallback(
+    (participant: Participant, password: string) => {
+      if (stateRef.current.phase !== "idle" || participant.isLocal || !password) return;
+      const reqId = randomId();
+      const name = participant.name || participant.identity;
+      setNotice(null);
+      setAuthError(null);
+      pendingAuthRef.current = { reqId, password };
+      setState({ phase: "authenticating", target: participant.identity, targetSid: participant.sid, targetName: name, reqId });
+      sendCtl(participant.identity, { t: "auth-request", v: RC_VERSION, reqId });
+    },
+    [sendCtl],
+  );
+
   const cancel = useCallback(() => {
     const s = stateRef.current;
-    if (s.phase !== "requesting") return;
+    if (s.phase !== "requesting" && s.phase !== "authenticating") return;
+    pendingAuthRef.current = null;
     sendCtl(s.target, { t: "cancel", reqId: s.reqId });
     setState({ phase: "idle" });
   }, [sendCtl]);
 
   const stop = useCallback(() => {
     const s = stateRef.current;
-    if (s.phase === "requesting") return cancel();
+    if (s.phase === "requesting" || s.phase === "authenticating") return cancel();
     if (s.phase !== "active") return;
     send({ t: "release" });
     sendCtl(s.target, { t: "revoke", sessionId: s.sessionId, reason: "user" });
@@ -258,8 +288,30 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
       const msg = parseCtl(payload);
       if (!msg) return;
       switch (msg.t) {
+        case "auth-challenge": {
+          if (s.phase !== "authenticating" || msg.reqId !== s.reqId) return;
+          const pending = pendingAuthRef.current;
+          if (!pending || pending.reqId !== msg.reqId) return;
+          const { password, reqId } = pending;
+          pendingAuthRef.current = null;
+          void proveUnattendedChallenge(password, msg.salt, reqId, msg.nonce)
+            .then((proof) => {
+              const cur = stateRef.current;
+              if (cur.phase !== "authenticating" || cur.reqId !== reqId || cur.target !== s.target) return;
+              sendCtl(cur.target, { t: "auth-response", reqId, proof });
+            })
+            .catch(() => {
+              const cur = stateRef.current;
+              if (cur.phase !== "authenticating" || cur.reqId !== reqId) return;
+              setAuthError("Não foi possível verificar a senha de acesso.");
+              setState({ phase: "idle" });
+            });
+          break;
+        }
         case "grant":
-          if (s.phase !== "requesting" || msg.reqId !== s.reqId) return;
+          if ((s.phase !== "requesting" && s.phase !== "authenticating") || msg.reqId !== s.reqId) return;
+          pendingAuthRef.current = null;
+          setAuthError(null);
           seq.current = 0;
           pings.current.clear();
           setState({
@@ -282,8 +334,13 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
           });
           break;
         case "deny":
-          if (s.phase !== "requesting" || msg.reqId !== s.reqId) return;
-          setNotice(denyText(s.targetName, msg.reason));
+          if ((s.phase !== "requesting" && s.phase !== "authenticating") || msg.reqId !== s.reqId) return;
+          pendingAuthRef.current = null;
+          if (s.phase === "authenticating") {
+            setAuthError(denyText(s.targetName, msg.reason));
+          } else {
+            setNotice(denyText(s.targetName, msg.reason));
+          }
           setState({ phase: "idle" });
           break;
         case "revoke":
@@ -360,7 +417,9 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
     const onGone = (participant: RemoteParticipant) => {
       const s = stateRef.current;
       if (s.phase === "idle" || participant.identity !== s.target) return;
-      setNotice(s.phase === "active" ? revokeText(s.targetName, "left") : `${s.targetName} saiu da sala.`);
+      pendingAuthRef.current = null;
+      if (s.phase === "authenticating") setAuthError(`${s.targetName} saiu da sala.`);
+      else setNotice(s.phase === "active" ? revokeText(s.targetName, "left") : `${s.targetName} saiu da sala.`);
       setState({ phase: "idle" });
     };
     // A reconexão de sinalização é transitória e não interrompe a mídia nem a
@@ -370,7 +429,9 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
     const onReconnecting = () => {
       const s = stateRef.current;
       if (s.phase === "idle") return;
-      setNotice(s.phase === "active" ? revokeText(s.targetName, "reconnected") : null);
+      pendingAuthRef.current = null;
+      if (s.phase === "authenticating") setAuthError("A conexão caiu durante a verificação.");
+      else setNotice(s.phase === "active" ? revokeText(s.targetName, "reconnected") : null);
       setState({ phase: "idle" });
     };
     room
@@ -418,19 +479,23 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
     };
   }, [room]);
 
-  // O pedido expira do outro lado em 30 s; se a resposta se perder, desiste aqui também.
-  const requestKey = state.phase === "requesting" ? state.reqId : null;
+  // O pedido expira do outro lado; se a resposta se perder, desiste aqui também.
+  const requestKey = state.phase === "requesting" || state.phase === "authenticating" ? state.reqId : null;
+  const requestPhase = state.phase === "requesting" || state.phase === "authenticating" ? state.phase : null;
   useEffect(() => {
-    if (!requestKey) return;
+    if (!requestKey || !requestPhase) return;
+    const ms = (requestPhase === "authenticating" ? AUTH_TIMEOUT_MS : CONSENT_TIMEOUT_MS) + 5000;
     const timer = setTimeout(() => {
       const s = stateRef.current;
-      if (s.phase === "requesting" && s.reqId === requestKey) {
-        setNotice(denyText(s.targetName, "timeout"));
+      if ((s.phase === "requesting" || s.phase === "authenticating") && s.reqId === requestKey) {
+        pendingAuthRef.current = null;
+        if (s.phase === "authenticating") setAuthError(denyText(s.targetName, "timeout"));
+        else setNotice(denyText(s.targetName, "timeout"));
         setState({ phase: "idle" });
       }
-    }, CONSENT_TIMEOUT_MS + 5000);
+    }, ms);
     return () => clearTimeout(timer);
-  }, [requestKey]);
+  }, [requestKey, requestPhase]);
 
   // Latência medida: ping pelo canal de controle a cada 2 s.
   const sessionKey = state.phase === "active" ? state.sessionId : null;
@@ -455,6 +520,7 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
   useEffect(() => () => stopRef.current(), []);
 
   const dismissNotice = useCallback(() => setNotice(null), []);
+  const dismissAuthError = useCallback(() => setAuthError(null), []);
 
   // A sessão acabou: o que estava esperando confirmação desiste.
   useEffect(() => {
@@ -489,5 +555,21 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
     sendCtl(s.target, { t: "admin-click", sessionId: s.sessionId, generation, x, y });
   }, [sendCtl]);
 
-  return { state, clipNotice, sendClip, notice, dismissNotice, request, cancel, stop, send, requestAdmin, stopAdmin, adminClick };
+  return {
+    state,
+    clipNotice,
+    sendClip,
+    notice,
+    dismissNotice,
+    authError,
+    dismissAuthError,
+    request,
+    requestDirect,
+    cancel,
+    stop,
+    send,
+    requestAdmin,
+    stopAdmin,
+    adminClick,
+  };
 }

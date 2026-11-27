@@ -1,10 +1,9 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import {
   app,
-  BrowserWindow,
   clipboard,
   globalShortcut,
   ipcMain,
@@ -12,19 +11,21 @@ import {
   powerMonitor,
   screen,
   utilityProcess,
+  type BrowserWindow,
   type UtilityProcess,
 } from "electron";
 import type { RemoteCapabilities, RemoteSessionEvent } from "../shared/ipc";
 import type { Rect } from "../shared/remote/geometry";
 import { MAX_CLIP_FILES, MAX_CLIP_FILES_BYTES, isId, parseCtl, randomId, type Ctl } from "../shared/remote/protocol";
+import { isProof, unattendedChallengeMessage } from "../shared/remote/unattendedAuth";
 import { nativeModulePath } from "./audio";
 import { appImage } from "./icons";
 import { HELPER_FLAG, PARENT_FLAG } from "./inputHelper";
 import { RemoteAdmin } from "./remoteAdmin";
 import { readRichClipboard, writeClipboardFiles, writeClipboardImage } from "./remoteClipboard";
-import { RemoteGate, type HostShare, type InjectCommand, type SessionInfo } from "./remoteGate";
+import { RemoteGate, type HostShare, type InjectCommand, type SessionInfo, type UnattendedVerifier } from "./remoteGate";
 import { asBoolean, asObject, asString, assertAppSender } from "./security";
-import { getSettings } from "./settings";
+import { getSettings, getUnattendedCredential } from "./settings";
 import { uacSetupArgs } from "./uacSetup";
 import { getMainWindow, getSharing, onSharingChanged, showMainWindow } from "./windows";
 
@@ -194,6 +195,34 @@ function consentNotification(name: string): void {
   n.show();
 }
 
+function unattendedAuth(): UnattendedVerifier | null {
+  const cred = getUnattendedCredential();
+  if (!cred) return null;
+  return {
+    salt: cred.salt,
+    verify(reqId, nonce, proof) {
+      if (!isProof(proof)) return false;
+      const expected = createHmac("sha256", Buffer.from(cred.key, "base64url"))
+        .update(unattendedChallengeMessage(reqId, nonce))
+        .digest();
+      const given = Buffer.from(proof, "base64url");
+      return given.length === expected.length && timingSafeEqual(given, expected);
+    },
+  };
+}
+
+function directControlNotification(name: string): void {
+  if (!Notification.isSupported()) return;
+  const n = new Notification({
+    title: `${name} assumiu o controle do seu computador`,
+    body: "Acesso direto com senha. Pressione Ctrl+Alt+Shift+S para encerrar na hora.",
+    icon: appImage(64),
+    urgency: "critical",
+  });
+  n.on("click", () => showMainWindow());
+  n.show();
+}
+
 const gate: RemoteGate = new RemoteGate({
   now: () => Date.now(),
   setTimer: (fn, ms) => setTimeout(fn, ms),
@@ -201,11 +230,10 @@ const gate: RemoteGate = new RemoteGate({
   randomId,
   share: currentShare,
   acceptsRequests: () => (available && !getSettings().remoteControlDisabled ? { ok: true } : { ok: false, reason: "disabled" }),
+  unattendedAuth,
   supportsAdmin: () => adminAuthorization() !== null,
-  appFocused: () => BrowserWindow.getFocusedWindow() !== null,
   send: (to: string, msg: Ctl) => sendToMain("remote:send", to, msg),
-  // Com o auxiliar elevado, o comando passa antes pelo utility (zona
-  // protegida) e volta como "forward"; a ordem se mantém.
+  // Com o auxiliar elevado, o comando passa antes pelo utility para manter a ordem.
   inject: (cmd) => child?.postMessage({ type: elevatedLink ? "check" : "inject", cmd }),
   // Síncrono, no main: um Ctrl+V que vem logo depois já encontra o texto.
   setClipboard: (text) => clipboard.writeText(text),
@@ -339,13 +367,18 @@ function attachElevated(socket: net.Socket): void {
 
 // ---------------------------------------------------------------- sessão
 
+let sessionWasActive = false;
+
 function onSessionChanged(info: SessionInfo | null, ended: RemoteSessionEvent["ended"]): void {
+  const startedDirect = info !== null && info.direct && !sessionWasActive;
+  sessionWasActive = info !== null;
   if (!info || info.paused) admin.stop();
   const event: RemoteSessionEvent = { session: info, ended };
   sendToMain("remote:session", event);
   syncWatch(info !== null);
   child?.postMessage({ type: "localWatch", on: info !== null });
   syncPanic(info !== null);
+  if (startedDirect) directControlNotification(info.name);
   notifyElevated(info);
   for (const fn of sessionListeners) fn(info !== null);
 }
@@ -509,11 +542,6 @@ export function registerRemote(): void {
 
   // Hook de teclado de quem controla: ligado enquanto a tela remota está focada.
   on("remote:captureKeys", (event, on) => void captureKeys(event.sender, asBoolean(on, "on")));
-
-  // O MyScreen ganhou/perdeu o primeiro plano: as teclas do controlador param/voltam.
-  const syncFocus = () => setImmediate(() => gate.setAppFocused(BrowserWindow.getFocusedWindow() !== null));
-  app.on("browser-window-focus", syncFocus);
-  app.on("browser-window-blur", syncFocus);
 
   onSharingChanged(() => gate.shareChanged());
   screen.on("display-removed", () => gate.shareChanged());

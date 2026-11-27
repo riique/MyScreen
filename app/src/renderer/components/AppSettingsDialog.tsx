@@ -1,5 +1,7 @@
+import { Eye, EyeOff, KeyRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AppSettings, ThemePreference, UpdateStatus } from "@shared/ipc";
+import { UNATTENDED_PASSWORD_MAX, UNATTENDED_PASSWORD_MIN } from "@shared/remote/unattendedAuth";
 import { CheckCell, ChoiceRow, Field, inputClass } from "@/components/sheet";
 import { readThemePreference, setThemePreference } from "@/lib/theme";
 import { setServerUrlCache } from "@/platform";
@@ -175,6 +177,10 @@ export function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: (
               label="Nunca aceitar pedidos de controle"
               note="Com a tela inteira no ar, quem está na sala pode pedir para controlar o seu mouse e teclado — só com o seu clique em “Permitir”. Ligado, ninguém nem vê a opção de pedir. Durante um controle, Ctrl+Alt+Shift+S encerra na hora."
             />
+            <UnattendedAccessRow
+              settings={settings}
+              onUpdated={(next) => setSettings(next)}
+            />
           </div>
 
           <div>
@@ -203,6 +209,221 @@ export function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: (
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Configuração da senha de acesso direto (admin / não assistido) deste PC. */
+function UnattendedAccessRow({
+  settings,
+  onUpdated,
+}: {
+  settings: AppSettings | null;
+  onUpdated: (next: AppSettings) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [statusNote, setStatusNote] = useState<string | null>(null);
+
+  const enabled = settings?.unattendedAccessEnabled ?? false;
+  const pausedByDisable = enabled && (settings?.remoteControlDisabled ?? false);
+
+  function closeEditor() {
+    setEditing(false);
+    setPassword("");
+    setConfirm("");
+    setShow(false);
+    setError(null);
+  }
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    if (password.length < UNATTENDED_PASSWORD_MIN || password.trim().length === 0) {
+      setError(`Use pelo menos ${UNATTENDED_PASSWORD_MIN} caracteres.`);
+      return;
+    }
+    if (password.length > UNATTENDED_PASSWORD_MAX) {
+      setError(`A senha pode ter no máximo ${UNATTENDED_PASSWORD_MAX} caracteres.`);
+      return;
+    }
+    if (password !== confirm) {
+      setError("As senhas não coincidem.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setStatusNote(null);
+    try {
+      const r = await window.myscreen.settings.setUnattendedPassword(password);
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      onUpdated(r.data);
+      closeEditor();
+      setStatusNote("Senha salva. Quem tiver esta senha pode controlar sua tela sem pedir permissão.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    setStatusNote(null);
+    try {
+      const r = await window.myscreen.settings.setUnattendedPassword(null);
+      if (r.ok) {
+        onUpdated(r.data);
+        closeEditor();
+        setStatusNote("Acesso direto desativado.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="border-t border-rule px-5 py-3.5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <KeyRound size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-ink-2" />
+            <p className="text-[0.875rem] font-medium text-ink">Acesso direto (admin)</p>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[0.6875rem] font-semibold ${
+                pausedByDisable
+                  ? "bg-band text-ink-3"
+                  : enabled
+                    ? "bg-signal-wash text-ink"
+                    : "bg-band text-ink-3"
+              }`}
+            >
+              {pausedByDisable ? "Pausado" : enabled ? "Ativo" : "Desativado"}
+            </span>
+          </div>
+          <p className="mt-1 max-w-[58ch] text-[0.8125rem] leading-[1.5] text-ink-3">
+            {pausedByDisable
+              ? "A senha está salva, mas fica pausada enquanto “Nunca aceitar pedidos de controle” estiver ligado."
+              : enabled
+                ? "Com a tela inteira no ar, quem souber a senha pode assumir o controle direto sem o seu clique em “Permitir”. O aviso continua visível na sala e Ctrl+Alt+Shift+S encerra na hora."
+                : "Permite definir uma senha fixa neste computador para que administradores assumam o controle sem esperar aprovação manual."}
+          </p>
+          {statusNote && !editing ? (
+            <p aria-live="polite" className="mt-1.5 text-[0.8125rem] text-ink-2">
+              {statusNote}
+            </p>
+          ) : null}
+        </div>
+        {!editing ? (
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              disabled={!settings || busy}
+              onClick={() => {
+                setStatusNote(null);
+                setError(null);
+                setEditing(true);
+              }}
+              className="border border-rule-2 bg-sheet px-3.5 py-1.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:border-rule-3 hover:bg-band disabled:opacity-45 [border-radius:var(--radius-cell)]"
+            >
+              {enabled ? "Alterar senha" : "Definir senha"}
+            </button>
+            {enabled ? (
+              <button
+                type="button"
+                disabled={!settings || busy}
+                onClick={() => void remove()}
+                className="border border-alert-line bg-sheet px-3 py-1.5 text-[0.8125rem] font-semibold text-alert transition-colors hover:bg-alert-wash disabled:opacity-45 [border-radius:var(--radius-cell)]"
+              >
+                Remover
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {editing ? (
+        <form onSubmit={(e) => void save(e)} className="mt-3.5 space-y-3 border-t border-rule pt-3.5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label htmlFor="set-unattended-pw" className="label-col block">
+                {enabled ? "Nova senha" : "Senha de acesso"}
+              </label>
+              <div className="relative mt-1.5">
+                <input
+                  id="set-unattended-pw"
+                  type={show ? "text" : "password"}
+                  autoFocus
+                  value={password}
+                  disabled={busy}
+                  autoComplete="new-password"
+                  placeholder={`Mínimo ${UNATTENDED_PASSWORD_MIN} caracteres`}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (error) setError(null);
+                  }}
+                  className={`${inputClass} pr-10`}
+                />
+                <button
+                  type="button"
+                  aria-label={show ? "Ocultar senha" : "Mostrar senha"}
+                  onClick={() => setShow((v) => !v)}
+                  className="absolute top-1/2 right-2 flex size-7 -translate-y-1/2 items-center justify-center text-ink-3 transition-colors hover:text-ink [border-radius:var(--radius-cell)]"
+                >
+                  {show ? <EyeOff size={15} strokeWidth={1.75} aria-hidden /> : <Eye size={15} strokeWidth={1.75} aria-hidden />}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label htmlFor="set-unattended-pw-confirm" className="label-col block">
+                Confirmar senha
+              </label>
+              <input
+                id="set-unattended-pw-confirm"
+                type={show ? "text" : "password"}
+                value={confirm}
+                disabled={busy}
+                autoComplete="new-password"
+                placeholder="Repita a senha"
+                onChange={(e) => {
+                  setConfirm(e.target.value);
+                  if (error) setError(null);
+                }}
+                className={`${inputClass} mt-1.5`}
+              />
+            </div>
+          </div>
+          {error ? (
+            <p role="alert" className="text-[0.8125rem] text-alert">
+              {error}
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={closeEditor}
+              className="border border-rule-2 bg-sheet px-3.5 py-1.5 text-[0.8125rem] font-semibold text-ink transition-colors hover:border-rule-3 hover:bg-band disabled:opacity-45 [border-radius:var(--radius-cell)]"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={busy || !password || !confirm}
+              className="border border-signal bg-signal px-4 py-1.5 text-[0.8125rem] font-semibold text-on-signal transition-colors hover:bg-signal-2 disabled:opacity-45 [border-radius:var(--radius-cell)]"
+            >
+              {busy ? "Salvando…" : "Salvar senha"}
+            </button>
+          </div>
+        </form>
+      ) : null}
     </div>
   );
 }

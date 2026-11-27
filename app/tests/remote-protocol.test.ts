@@ -21,6 +21,7 @@ import {
 
 const ID = "AAECAwQFBgcICQoLDA0ODw"; // bytes 0..15
 const PUBLIC_KEY = "B" + "A".repeat(86);
+const PROOF = "A".repeat(43);
 
 describe("ids", () => {
   it("randomId tem 22 caracteres base64url e é único", () => {
@@ -39,8 +40,13 @@ describe("rc.ctl", () => {
     const msgs = [
       { t: "request", v: 1, reqId: ID },
       { t: "cancel", reqId: ID },
+      { t: "auth-request", v: 1, reqId: ID },
+      { t: "auth-challenge", reqId: ID, salt: ID, nonce: ID },
+      { t: "auth-response", reqId: ID, proof: PROOF },
       { t: "grant", reqId: ID, sessionId: ID, trackSid: "TR_abc123", width: 2560, height: 1440 },
       { t: "deny", reqId: ID, reason: "refused" },
+      { t: "deny", reqId: ID, reason: "bad-password" },
+      { t: "deny", reqId: ID, reason: "auth-unavailable" },
       { t: "revoke", sessionId: ID, reason: "panic" },
       { t: "state", sessionId: ID, paused: true, why: "elevated" },
       { t: "state", sessionId: ID, paused: false },
@@ -59,6 +65,9 @@ describe("rc.ctl", () => {
   });
   it("recusa esquema errado", () => {
     expect(parseCtl({ t: "request", v: 1, reqId: "curto" })).toBeNull();
+    expect(parseCtl({ t: "auth-request", v: 1, reqId: "curto" })).toBeNull();
+    expect(parseCtl({ t: "auth-challenge", reqId: ID, salt: "curto", nonce: ID })).toBeNull();
+    expect(parseCtl({ t: "auth-response", reqId: ID, proof: "curto" })).toBeNull();
     expect(parseCtl({ t: "deny", reqId: ID, reason: "porque sim" })).toBeNull();
     expect(parseCtl({ t: "state", sessionId: ID, paused: "sim" })).toBeNull();
     expect(parseCtl({ t: "grant", reqId: ID, sessionId: ID, trackSid: "x y", width: 1, height: 1 })).toBeNull();

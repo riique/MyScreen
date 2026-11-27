@@ -44,7 +44,7 @@ import {
   screenBitrate,
   type MediaPrefs,
 } from "@shared/media";
-import { ATTR_UAC, ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
+import { ATTR_UAC, ATTR_UNATTENDED, ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
 import { ChatSidebar } from "./ChatSidebar";
 import { useRoomChat } from "./useRoomChat";
 import { MediaControls } from "./MediaControls";
@@ -54,6 +54,7 @@ import { SettingsModal, type MediaSettings } from "./SettingsModal";
 import { ShareDialog } from "./ShareDialog";
 import { SystemAudioControl } from "./SystemAudioControl";
 import { TrackStatsDropdown } from "./TrackStatsDropdown";
+import { AdminAccessDialog } from "./remote/AdminAccessDialog";
 import { ConsentDialog } from "./remote/ConsentDialog";
 import { ControlOverlay } from "./remote/ControlOverlay";
 import { SecureDesktop } from "./remote/SecureDesktop";
@@ -90,6 +91,7 @@ import {
   Check,
   Columns2,
   ExternalLink,
+  KeyRound,
   Link2,
   Maximize2,
   MessageSquare,
@@ -347,10 +349,12 @@ function ConferenceStage({
   // O que está no ar (só tela inteira pode ser controlada).
   const [hostShare, setHostShare] = useState<HostShare | null>(null);
   const [remoteDisabled, setRemoteDisabled] = useState(false);
+  const [unattendedEnabled, setUnattendedEnabled] = useState(false);
   const [soundboardEnabled, setSoundboardEnabled] = useState(false);
   useEffect(() => {
     void window.myscreen.settings.get().then((s) => {
       setRemoteDisabled(s.remoteControlDisabled);
+      setUnattendedEnabled(s.unattendedAccessEnabled);
       setSoundboardEnabled(s.soundboardEnabled);
     });
   }, []);
@@ -358,16 +362,20 @@ function ConferenceStage({
     room,
     share: hostShare,
     disabled: remoteDisabled,
+    unattendedEnabled,
     myName: localParticipant.name || localParticipant.identity || "você",
     sendChat: roomChat.send,
   });
   const remoteViewer = useRemoteControlViewer(room);
   const remoteAdmin = useRemoteAdminHost(room);
+  const [directTarget, setDirectTarget] = useState<Participant | null>(null);
+  const sessionDirectPasswords = useRef(new Map<string, string>());
   // "Enviar texto" abre pela barra da sala, mas o formulário fica no quadro.
   const [rcTextOpen, setRcTextOpen] = useState(false);
   const rcActive = remoteViewer.state.phase === "active";
   useEffect(() => {
     if (!rcActive) setRcTextOpen(false);
+    else setDirectTarget(null);
   }, [rcActive]);
 
   /* --- Gravação ------------------------------------------------------------ */
@@ -1082,6 +1090,14 @@ function ConferenceStage({
     window.myscreen.audio.update({ normalize: patch.normalize, gainPct: patch.gainPct });
   }, []);
 
+  const openDirectAccess = useCallback(
+    (participant: Participant) => {
+      remoteViewer.dismissAuthError();
+      setDirectTarget(participant);
+    },
+    [remoteViewer],
+  );
+
   const tileProps = {
     pinnedKeys: pinned,
     canSideBySide: focus !== undefined,
@@ -1091,6 +1107,7 @@ function ConferenceStage({
     onTogglePin: togglePin,
     onToggleFullscreen: toggleFullscreen,
     remote: remoteViewer,
+    onDirectControl: openDirectAccess,
     rcTextOpen,
     setRcTextOpen,
     leftShares,
@@ -1323,6 +1340,28 @@ function ConferenceStage({
         <ConsentDialog key={remoteHost.consent.reqId} request={remoteHost.consent} onDecide={remoteHost.decide} />
       ) : null}
 
+      {directTarget ? (
+        <AdminAccessDialog
+          key={directTarget.identity}
+          targetName={directTarget.name || directTarget.identity}
+          targetIdentity={directTarget.identity}
+          initialPassword={sessionDirectPasswords.current.get(directTarget.identity) ?? ""}
+          busy={remoteViewer.state.phase === "authenticating" && remoteViewer.state.target === directTarget.identity}
+          error={remoteViewer.authError}
+          onClearError={remoteViewer.dismissAuthError}
+          onSubmit={(password, remember) => {
+            if (remember) sessionDirectPasswords.current.set(directTarget.identity, password);
+            else sessionDirectPasswords.current.delete(directTarget.identity);
+            remoteViewer.requestDirect(directTarget, password);
+          }}
+          onCancel={() => {
+            if (remoteViewer.state.phase === "authenticating") remoteViewer.cancel();
+            remoteViewer.dismissAuthError();
+            setDirectTarget(null);
+          }}
+        />
+      ) : null}
+
       <RecordDialog
         open={isRecordOpen}
         options={recordOptions}
@@ -1535,6 +1574,7 @@ type TileShared = {
   onTogglePin: (key: string) => void;
   onToggleFullscreen: (element: Element | null) => void;
   remote: RemoteViewer;
+  onDirectControl: (participant: Participant) => void;
   rcTextOpen: boolean;
   setRcTextOpen: (open: boolean | ((v: boolean) => boolean)) => void;
   leftShares: LeftShares;
@@ -1696,6 +1736,7 @@ function Tile({
   onTogglePin,
   onToggleFullscreen,
   remote,
+  onDirectControl,
   rcTextOpen,
   setRcTextOpen,
   leftShares,
@@ -1729,14 +1770,16 @@ function Tile({
   // Controle remoto: só a tela de quem anuncia `rc.v` compatível (app de
   // Windows, tela inteira, recurso ligado) oferece "Pedir controle".
   const rcVersion = useParticipantAttribute(ATTR_VERSION, { participant });
+  const rcUnattended = useParticipantAttribute(ATTR_UNATTENDED, { participant }) === "1";
   const secureDesktop = useParticipantAttribute(ATTR_UAC, { participant }) === "1" && isScreen;
   const rs = remote.state;
   const isTarget = rs.phase !== "idle" && rs.target === participant.identity && isScreen;
   const controlling =
     isTarget && rs.phase === "active" && trackRef.publication?.trackSid === rs.trackSid;
-  const requesting = isTarget && rs.phase === "requesting";
+  const requesting = isTarget && (rs.phase === "requesting" || rs.phase === "authenticating");
   const canRequest =
     isScreen && !participant.isLocal && hasVideo && rcVersion === String(RC_VERSION) && rs.phase === "idle";
+  const canDirect = canRequest && rcUnattended;
 
   // Em tela cheia, nome e ações só aparecem quando o mouse mexe, e somem (com
   // o cursor) depois de um tempo parado: o quadro é para ser assistido.
@@ -1859,21 +1902,23 @@ function Tile({
         </>
       ) : null}
 
-      {/* Identificação: sempre legível sobre qualquer imagem. */}
-      <div
-        className={cn(
-          "pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-[0.75rem] font-medium text-white backdrop-blur-sm transition-opacity duration-300",
-          chromeHidden && "opacity-0",
-        )}
-      >
-        {isScreen ? (
-          <MonitorUp size={12} strokeWidth={2} aria-hidden className="shrink-0" />
-        ) : micMuted ? (
-          <MicOff size={12} strokeWidth={2} aria-hidden className="shrink-0 text-[#ff9b8a]" />
-        ) : null}
-        <span className="truncate">{label}</span>
-        {!isScreen && micMuted ? <span className="sr-only">, microfone mudo</span> : null}
-      </div>
+      {/* Identificação: oculta enquanto controla para não tapar o canto inferior esquerdo. */}
+      {!controlling ? (
+        <div
+          className={cn(
+            "pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-[0.75rem] font-medium text-white backdrop-blur-sm transition-opacity duration-300",
+            chromeHidden && "opacity-0",
+          )}
+        >
+          {isScreen ? (
+            <MonitorUp size={12} strokeWidth={2} aria-hidden className="shrink-0" />
+          ) : micMuted ? (
+            <MicOff size={12} strokeWidth={2} aria-hidden className="shrink-0 text-[#ff9b8a]" />
+          ) : null}
+          <span className="truncate">{label}</span>
+          {!isScreen && micMuted ? <span className="sr-only">, microfone mudo</span> : null}
+        </div>
+      ) : null}
 
       {/* Ações do quadro: aparecem no hover e no foco; no toque, sempre. Em
           tela cheia, só enquanto o mouse se mexe. */}
@@ -1900,6 +1945,11 @@ function Tile({
             }}
           >
             <EyeOff size={14} strokeWidth={1.75} aria-hidden />
+          </TileAction>
+        ) : null}
+        {canDirect ? (
+          <TileAction label={`Acesso direto (admin) à tela de ${name}`} onClick={() => onDirectControl(participant)}>
+            <KeyRound size={14} strokeWidth={1.75} aria-hidden />
           </TileAction>
         ) : null}
         {canRequest ? (
@@ -1959,6 +2009,13 @@ function Tile({
                       leftShares.leave(participant.identity);
                     },
                   }
+              : null,
+            canDirect
+              ? {
+                  label: "Acesso direto (admin)",
+                  icon: <KeyRound size={14} strokeWidth={1.75} aria-hidden />,
+                  onSelect: () => onDirectControl(participant),
+                }
               : null,
             canRequest
               ? {

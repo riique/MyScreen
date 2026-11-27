@@ -1,5 +1,6 @@
 import { toPhysical, type Rect } from "../shared/remote/geometry";
 import {
+  AUTH_TIMEOUT_MS,
   CLIP_FIRST,
   CLIP_LAST,
   CONSENT_TIMEOUT_MS,
@@ -51,7 +52,14 @@ export type SessionInfo = {
   paused: boolean;
   /** Janela de administrador em primeiro plano: o Windows descarta o input. */
   elevated: boolean;
+  /** True quando a sessão começou por acesso direto (senha de admin). */
+  direct: boolean;
 };
+
+export interface UnattendedVerifier {
+  salt: string;
+  verify(reqId: string, nonce: string, proof: string): boolean;
+}
 
 export interface GateDeps {
   now(): number;
@@ -62,13 +70,9 @@ export interface GateDeps {
   share(): HostShare | null;
   /** O injetor nativo carregou e a pessoa não desligou o recurso. */
   acceptsRequests(): { ok: true } | { ok: false; reason: "disabled" };
+  /** Senha de acesso direto configurada neste PC (null: exige permissão manual). */
+  unattendedAuth?(): UnattendedVerifier | null;
   supportsAdmin?(): boolean;
-  /**
-   * Uma janela do MyScreen está em primeiro plano: tecla é descartada. (O
-   * clique sobre uma janela do MyScreen é descartado no utility "input", que
-   * pergunta ao Windows qual janela está DE FATO sob o pixel.)
-   */
-  appFocused(): boolean;
   send(to: string, msg: Ctl): void;
   inject(cmd: InjectCommand): void;
   /** Põe na área de transferência deste PC o texto copiado em quem controla. */
@@ -84,8 +88,11 @@ export const BUCKET_BURST = 480;
 /** Movimento só passa se sobrar esta reserva: clique e tecla têm prioridade. */
 const MOVE_RESERVE = 48;
 const TEXT_COST = 20;
+/** Espera progressiva por identidade após senhas erradas no acesso direto. */
+const AUTH_BACKOFF_MS = [1_500, 3_000, 10_000, 30_000, 120_000];
 
 type Pending = { reqId: string; peer: Peer; timer: unknown };
+type AuthPending = { reqId: string; peer: Peer; nonce: string; timer: unknown };
 
 type Session = {
   sessionId: string;
@@ -93,9 +100,9 @@ type Session = {
   peer: Peer;
   trackSid: string;
   display: Rect;
+  direct: boolean;
   paused: boolean;
   elevated: boolean;
-  appFocused: boolean;
   lastSeq: number | null;
   pressedKeys: Set<number>;
   pressedButtons: Set<number>;
@@ -116,14 +123,19 @@ export const LOCAL_YIELD_MS = 1000;
 
 export class RemoteGate {
   private pending: Pending | null = null;
+  private authPending: AuthPending | null = null;
   private session: Session | null = null;
   private readonly cooldown = new Map<string, number>();
+  private readonly authCooldown = new Map<string, number>();
+  private readonly authFailures = new Map<string, number>();
 
   constructor(private readonly deps: GateDeps) {}
 
   get active(): SessionInfo | null {
     const s = this.session;
-    return s ? { identity: s.peer.identity, name: s.peer.name, paused: s.paused, elevated: s.elevated } : null;
+    return s
+      ? { identity: s.peer.identity, name: s.peer.name, paused: s.paused, elevated: s.elevated, direct: s.direct }
+      : null;
   }
 
   get pendingRequest(): string | null {
@@ -137,9 +149,18 @@ export class RemoteGate {
       case "request":
         this.onRequest(from, msg.reqId, msg.v);
         break;
+      case "auth-request":
+        this.onAuthRequest(from, msg.reqId, msg.v);
+        break;
+      case "auth-response":
+        this.onAuthResponse(from, msg.reqId, msg.proof);
+        break;
       case "cancel":
         if (this.pending && this.pending.reqId === msg.reqId && this.pending.peer.identity === from.identity) {
           this.clearPending();
+        }
+        if (this.authPending && this.authPending.reqId === msg.reqId && this.authPending.peer.identity === from.identity) {
+          this.clearAuthPending();
         }
         break;
       case "revoke": {
@@ -155,7 +176,7 @@ export class RemoteGate {
         break;
       }
       default:
-        // grant/deny/state/pong só fazem sentido no outro sentido.
+        // grant/deny/state/pong/auth-challenge só fazem sentido no outro sentido.
         break;
     }
   }
@@ -183,6 +204,57 @@ export class RemoteGate {
     this.deps.askConsent({ reqId, name: from.name, identity: from.identity, sourceName: share.sourceName });
   }
 
+  private onAuthRequest(from: Peer, reqId: string, version: number): void {
+    const deny = (reason: Extract<Ctl, { t: "deny" }>["reason"]) =>
+      this.deps.send(from.identity, { t: "deny", reqId, reason });
+    if (this.authPending?.reqId === reqId) return;
+    if (version !== RC_VERSION) return deny("disabled");
+    if (!this.deps.acceptsRequests().ok) return deny("disabled");
+    const auth = this.deps.unattendedAuth?.() ?? null;
+    if (!auth) return deny("auth-unavailable");
+    const share = this.deps.share();
+    if (!share || share.kind !== "screen" || !share.trackSid || !share.physical) return deny("not-sharing");
+    if (this.session || this.pending) return deny("busy");
+    if (this.authPending && this.authPending.peer.identity !== from.identity) return deny("busy");
+    const until = this.authCooldown.get(from.identity);
+    if (until !== undefined && this.deps.now() < until) return deny("cooldown");
+    this.authCooldown.delete(from.identity);
+
+    if (this.authPending) this.clearAuthPending();
+    const nonce = this.deps.randomId();
+    const timer = this.deps.setTimer(() => {
+      if (this.authPending?.reqId !== reqId) return;
+      this.clearAuthPending();
+      deny("timeout");
+    }, AUTH_TIMEOUT_MS);
+    this.authPending = { reqId, peer: from, nonce, timer };
+    this.deps.send(from.identity, { t: "auth-challenge", reqId, salt: auth.salt, nonce });
+  }
+
+  private onAuthResponse(from: Peer, reqId: string, proof: string): void {
+    const p = this.authPending;
+    if (!p || p.reqId !== reqId || p.peer.identity !== from.identity || p.peer.sid !== from.sid) return;
+    this.clearAuthPending();
+    const deny = (reason: Extract<Ctl, { t: "deny" }>["reason"]) =>
+      this.deps.send(from.identity, { t: "deny", reqId, reason });
+    if (!this.deps.acceptsRequests().ok) return deny("disabled");
+    const auth = this.deps.unattendedAuth?.() ?? null;
+    if (!auth) return deny("auth-unavailable");
+    if (this.session || this.pending) return deny("busy");
+    const share = this.deps.share();
+    if (!share || share.kind !== "screen" || !share.trackSid || !share.physical) return deny("not-sharing");
+    if (!auth.verify(reqId, p.nonce, proof)) {
+      const fails = (this.authFailures.get(from.identity) ?? 0) + 1;
+      this.authFailures.set(from.identity, fails);
+      const wait = AUTH_BACKOFF_MS[Math.min(fails - 1, AUTH_BACKOFF_MS.length - 1)];
+      this.authCooldown.set(from.identity, this.deps.now() + wait);
+      return deny("bad-password");
+    }
+    this.authFailures.delete(from.identity);
+    this.authCooldown.delete(from.identity);
+    this.startSession(reqId, from, share, true);
+  }
+
   private clearPending(): void {
     const p = this.pending;
     if (!p) return;
@@ -191,34 +263,45 @@ export class RemoteGate {
     this.deps.closeConsent(p.reqId);
   }
 
-  /** A resposta do diálogo. Só o clique em "Permitir" cria uma sessão. */
+  private clearAuthPending(): void {
+    const p = this.authPending;
+    if (!p) return;
+    this.authPending = null;
+    this.deps.clearTimer(p.timer);
+  }
+
+  /** A resposta do diálogo. */
   decide(reqId: string, allow: boolean): void {
     const p = this.pending;
     if (!p || p.reqId !== reqId) return;
     this.clearPending();
-    const send = (msg: Ctl) => this.deps.send(p.peer.identity, msg);
     if (!allow) {
       this.cooldown.set(p.peer.identity, this.deps.now() + REQUEST_COOLDOWN_MS);
-      send({ t: "deny", reqId, reason: "refused" });
+      this.deps.send(p.peer.identity, { t: "deny", reqId, reason: "refused" });
       return;
     }
     const share = this.deps.share();
     if (!share || share.kind !== "screen" || !share.trackSid || !share.physical) {
-      send({ t: "deny", reqId, reason: "not-sharing" });
+      this.deps.send(p.peer.identity, { t: "deny", reqId, reason: "not-sharing" });
       return;
     }
+    this.startSession(reqId, p.peer, share, false);
+  }
+
+  private startSession(reqId: string, peer: Peer, share: HostShare, direct: boolean): void {
+    if (!share.trackSid || !share.physical) return;
     const sessionId = this.deps.randomId();
     this.session = {
       sessionId,
       tag: sessionTag(sessionId),
-      peer: p.peer,
+      peer,
       trackSid: share.trackSid,
       display: share.physical,
+      direct,
       paused: false,
       localUntil: 0,
       localTimer: null,
       elevated: false,
-      appFocused: this.deps.appFocused(),
       lastSeq: null,
       pressedKeys: new Set(),
       pressedButtons: new Set(),
@@ -227,7 +310,7 @@ export class RemoteGate {
       blockedNoticeAt: -Infinity,
       clip: null,
     };
-    send({
+    this.deps.send(peer.identity, {
       t: "grant",
       reqId,
       sessionId,
@@ -236,9 +319,6 @@ export class RemoteGate {
       height: Math.round(share.physical.h),
       ...(this.deps.supportsAdmin?.() ? { admin: true } : {}),
     });
-    // Quem acabou de clicar em "Permitir" está com o MyScreen na frente: avisa
-    // o controlador que as teclas só chegam depois de um clique fora dele.
-    if (this.session.appFocused) this.sendState(this.session);
     this.deps.sessionChanged(this.active);
   }
 
@@ -324,7 +404,6 @@ export class RemoteGate {
       }
       case "key":
         if (ev.down) {
-          if (this.deps.appFocused()) return false;
           s.pressedKeys.add(ev.scancode);
         } else if (!s.pressedKeys.delete(ev.scancode)) {
           return false;
@@ -332,7 +411,6 @@ export class RemoteGate {
         this.deps.inject({ t: "key", scancode: ev.scancode, down: ev.down });
         return true;
       case "text":
-        if (this.deps.appFocused()) return false;
         this.deps.inject({ t: "text", text: ev.text });
         return true;
       case "clip":
@@ -468,23 +546,13 @@ export class RemoteGate {
     this.deps.send(s.peer.identity, { t: "blocked", sessionId: s.sessionId });
   }
 
-  /** Uma janela do MyScreen ganhou ou perdeu o primeiro plano. */
-  setAppFocused(focused: boolean): void {
-    const s = this.session;
-    if (!s || s.appFocused === focused) return;
-    s.appFocused = focused;
-    this.sendState(s);
-  }
-
   private sendState(s: Session): void {
     const why: PauseWhy | undefined = s.paused
       ? "user"
       : this.localActive(s)
         ? "local-input"
         : s.elevated
-        ? "elevated"
-        : s.appFocused
-          ? "protected"
+          ? "elevated"
           : undefined;
     const msg: Ctl = why
       ? { t: "state", sessionId: s.sessionId, paused: true, why }
@@ -504,11 +572,17 @@ export class RemoteGate {
       this.clearPending();
       this.deps.send(p.peer.identity, { t: "deny", reqId: p.reqId, reason: "not-sharing" });
     }
+    if (this.authPending && (!share || share.kind !== "screen")) {
+      const p = this.authPending;
+      this.clearAuthPending();
+      this.deps.send(p.peer.identity, { t: "deny", reqId: p.reqId, reason: "not-sharing" });
+    }
   }
 
   /** Alguém saiu da sala (ou reconectou com outro SID). */
   peerGone(identity: string, reason: "left" | "reconnected"): void {
     if (this.pending?.peer.identity === identity) this.clearPending();
+    if (this.authPending?.peer.identity === identity) this.clearAuthPending();
     if (this.session?.peer.identity === identity) this.end(reason, reason === "reconnected");
   }
 
@@ -518,6 +592,8 @@ export class RemoteGate {
     if (s && s.peer.identity === identity && s.peer.sid !== sid) this.end("reconnected");
     const p = this.pending;
     if (p && p.peer.identity === identity && p.peer.sid !== sid) this.clearPending();
+    const a = this.authPending;
+    if (a && a.peer.identity === identity && a.peer.sid !== sid) this.clearAuthPending();
   }
 
   /**
@@ -528,6 +604,11 @@ export class RemoteGate {
     if (this.pending) {
       const p = this.pending;
       this.clearPending();
+      if (notifyPeer) this.deps.send(p.peer.identity, { t: "deny", reqId: p.reqId, reason: "busy" });
+    }
+    if (this.authPending) {
+      const p = this.authPending;
+      this.clearAuthPending();
       if (notifyPeer) this.deps.send(p.peer.identity, { t: "deny", reqId: p.reqId, reason: "busy" });
     }
     const s = this.session;

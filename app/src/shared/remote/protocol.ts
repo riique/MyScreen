@@ -11,6 +11,8 @@
  * nunca vai para a sala inteira.
  */
 
+import { isProof } from "./unattendedAuth";
+
 export const RC_VERSION = 1;
 export const TOPIC_CTL = "myscreen.rc.ctl";
 export const TOPIC_IN = "myscreen.rc.in";
@@ -31,13 +33,25 @@ export const ATTR_VERSION = "rc.v";
 export const ATTR_DISPLAY = "rc.display";
 export const ATTR_BY = "rc.by";
 export const ATTR_UAC = "rc.uac";
+/** "1" quando o PC controlado tem senha de acesso direto (admin) configurada. */
+export const ATTR_UNATTENDED = "rc.unattended";
 
 /** Pedido sem resposta vira recusa. */
 export const CONSENT_TIMEOUT_MS = 30_000;
+/** Desafio de acesso direto sem resposta expira em 15 s. */
+export const AUTH_TIMEOUT_MS = 15_000;
 /** Depois de recusar, a mesma identidade espera isto para pedir de novo. */
 export const REQUEST_COOLDOWN_MS = 30_000;
 
-export type DenyReason = "refused" | "timeout" | "busy" | "disabled" | "not-sharing" | "cooldown";
+export type DenyReason =
+  | "refused"
+  | "timeout"
+  | "busy"
+  | "disabled"
+  | "not-sharing"
+  | "cooldown"
+  | "bad-password"
+  | "auth-unavailable";
 export type RevokeReason = "user" | "share-ended" | "left" | "reconnected" | "locked" | "panic" | "error";
 /** `protected`: o MyScreen da pessoa controlada está em primeiro plano e as teclas não entram. */
 export type PauseWhy = "local-input" | "locked" | "elevated" | "user" | "protected";
@@ -48,6 +62,9 @@ export type AdminStatus = "waiting" | "enabled" | "refused" | "unavailable" | "r
 export type Ctl =
   | { t: "request"; v: number; reqId: string }
   | { t: "cancel"; reqId: string }
+  | { t: "auth-request"; v: number; reqId: string }
+  | { t: "auth-challenge"; reqId: string; salt: string; nonce: string }
+  | { t: "auth-response"; reqId: string; proof: string }
   | { t: "grant"; reqId: string; sessionId: string; trackSid: string; width: number; height: number; admin?: true }
   | { t: "deny"; reqId: string; reason: DenyReason }
   | { t: "revoke"; sessionId: string; reason: RevokeReason }
@@ -65,7 +82,16 @@ export type Ctl =
   | { t: "ping"; sessionId: string; n: number }
   | { t: "pong"; sessionId: string; n: number };
 
-const DENY: readonly DenyReason[] = ["refused", "timeout", "busy", "disabled", "not-sharing", "cooldown"];
+const DENY: readonly DenyReason[] = [
+  "refused",
+  "timeout",
+  "busy",
+  "disabled",
+  "not-sharing",
+  "cooldown",
+  "bad-password",
+  "auth-unavailable",
+];
 const REVOKE: readonly RevokeReason[] = ["user", "share-ended", "left", "reconnected", "locked", "panic", "error"];
 const WHY: readonly PauseWhy[] = ["local-input", "locked", "elevated", "user", "protected"];
 
@@ -125,6 +151,14 @@ export function parseCtl(input: Uint8Array | unknown): Ctl | null {
       return isUint(m.v, 1000) && isId(m.reqId) ? { t: "request", v: m.v, reqId: m.reqId } : null;
     case "cancel":
       return isId(m.reqId) ? { t: "cancel", reqId: m.reqId } : null;
+    case "auth-request":
+      return isUint(m.v, 1000) && isId(m.reqId) ? { t: "auth-request", v: m.v, reqId: m.reqId } : null;
+    case "auth-challenge":
+      return isId(m.reqId) && isId(m.salt) && isId(m.nonce)
+        ? { t: "auth-challenge", reqId: m.reqId, salt: m.salt, nonce: m.nonce }
+        : null;
+    case "auth-response":
+      return isId(m.reqId) && isProof(m.proof) ? { t: "auth-response", reqId: m.reqId, proof: m.proof } : null;
     case "grant":
       return isId(m.reqId) && isId(m.sessionId) && isTrackSid(m.trackSid) && isUint(m.width, 100_000) && isUint(m.height, 100_000)
         ? { t: "grant", reqId: m.reqId, sessionId: m.sessionId, trackSid: m.trackSid, width: m.width, height: m.height,

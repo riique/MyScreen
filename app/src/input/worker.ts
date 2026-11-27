@@ -54,22 +54,16 @@ function run(cmd: InjectCommand): void {
     return;
   }
   if (!injector) return;
-  const result = inject(injector, ownPid, cmd);
+  const result = inject(injector, 0, cmd);
   if (result === "blocked") parent.postMessage({ type: "blocked" });
   else if (result !== "ok") parent.postMessage({ type: "error", message: result.error });
 }
 
 /**
- * Com o auxiliar elevado ligado, todo comando passa por aqui antes (na ordem)
- * só para conferir a zona protegida e avisar do clique bloqueado.
+ * Com o auxiliar elevado ligado, repassa o comando em ordem para o main enviar
+ * ao processo elevado.
  */
 function check(cmd: InjectCommand): void {
-  if (injector && ((cmd.t === "button" && cmd.down) || cmd.t === "wheel")) {
-    if (ownPid && injector.windowPidAt(cmd.px, cmd.py) === ownPid) {
-      parent.postMessage({ type: "blocked" });
-      return;
-    }
-  }
   parent.postMessage({ type: "forward", cmd });
 }
 
