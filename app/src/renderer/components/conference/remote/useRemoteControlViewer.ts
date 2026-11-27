@@ -363,7 +363,10 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
       setNotice(s.phase === "active" ? revokeText(s.targetName, "left") : `${s.targetName} saiu da sala.`);
       setState({ phase: "idle" });
     };
-    // A nossa conexão caiu: do outro lado a sessão é revogada; aqui, também.
+    // A reconexão de sinalização é transitória e não interrompe a mídia nem a
+    // sessão de controle. Só uma reconexão completa (que troca a conexão do
+    // participante) deve encerrar o controle. Encerrar em SignalReconnecting
+    // fazia o controle desaparecer durante oscilações breves da rede.
     const onReconnecting = () => {
       const s = stateRef.current;
       if (s.phase === "idle") return;
@@ -373,8 +376,7 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
     room
       .on(RoomEvent.DataReceived, onData)
       .on(RoomEvent.ParticipantDisconnected, onGone)
-      .on(RoomEvent.Reconnecting, onReconnecting)
-      .on(RoomEvent.SignalReconnecting, onReconnecting);
+      .on(RoomEvent.Reconnecting, onReconnecting);
     room.registerByteStreamHandler(TOPIC_UAC_FRAME, (reader, info) => {
       void (async () => {
         const s = stateRef.current;
@@ -412,8 +414,7 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
       room
         .off(RoomEvent.DataReceived, onData)
         .off(RoomEvent.ParticipantDisconnected, onGone)
-        .off(RoomEvent.Reconnecting, onReconnecting)
-        .off(RoomEvent.SignalReconnecting, onReconnecting);
+        .off(RoomEvent.Reconnecting, onReconnecting);
     };
   }, [room]);
 
